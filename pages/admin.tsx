@@ -411,6 +411,10 @@ export default function AdminPage() {
   const [resetError, setResetError] = useState<string | null>(null);
   const [resetErrorToast, setResetErrorToast] = useState<string | null>(null);
 
+  // Recovery Panel
+  const [recoveryModal, setRecoveryModal] = useState<null | "resetTimers" | "resetEventState" | "rebuildBoard">(null);
+  const [recoveryResult, setRecoveryResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
   // Add Participant modal (legacy quick-add)
   const [addModalPadId, setAddModalPadId] = useState<number | null>(null);
   const [addTeamName, setAddTeamName] = useState("");
@@ -597,7 +601,7 @@ export default function AdminPage() {
       clearTimeout(ackTimeout);
       setConfirmStartNewEvent(false);
       if (ack?.ok) {
-        setResetSuccessMsg("New event started. Ops Chat cleared.");
+        setResetSuccessMsg("Ops Chat and selected logs cleared.");
         setTimeout(() => setResetSuccessMsg(null), 5000);
       } else {
         const err = ack?.error ?? "Reset failed (no response)";
@@ -609,6 +613,24 @@ export default function AdminPage() {
           setResetErrorToast(null);
         }, 8000);
       }
+    });
+  };
+
+  // Recovery Panel actions
+  const doRecovery = (action: "resetTimers" | "resetEventState" | "rebuildBoard") => {
+    const eventName = {
+      resetTimers: "admin:recovery:resetTimers",
+      resetEventState: "admin:recovery:resetEventState",
+      rebuildBoard: "admin:recovery:rebuildBoard",
+    }[action];
+    socket?.emit?.(eventName, {}, (ack?: { ok?: boolean; error?: string; detail?: string }) => {
+      setRecoveryModal(null);
+      if (ack?.ok) {
+        setRecoveryResult({ ok: true, msg: ack.detail ?? "Done." });
+      } else {
+        setRecoveryResult({ ok: false, msg: ack?.error ?? "Failed." });
+      }
+      setTimeout(() => setRecoveryResult(null), 7000);
     });
   };
 
@@ -1671,10 +1693,10 @@ export default function AdminPage() {
             <button
               onClick={() => setConfirmStartNewEvent(true)}
               disabled={!canAct}
-              title="Clear Ops Chat and optionally reset queues"
+              title="Clear Ops Chat, audit log, or training areas. For queue/timer/event resets use the Recovery panel."
               style={{ ...adminBtnSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
             >
-              Reset Event…
+              Clear Comm & Logs…
             </button>
 
             <button
@@ -1715,7 +1737,7 @@ export default function AdminPage() {
               color: "#f48fb1",
             }}
           >
-            <b>Reset Event failed:</b> {resetErrorToast}
+            <b>Clear Comm & Logs failed:</b> {resetErrorToast}
           </div>
         ) : null}
         {reloadRosterMsg ? (
@@ -1751,6 +1773,81 @@ export default function AdminPage() {
             ✅ {clearAllSuccessMsg}
           </div>
         ) : null}
+
+        {/* =======================
+            Recovery Panel
+           ======================= */}
+        <div
+          style={{
+            marginTop: 16,
+            borderRadius: 16,
+            padding: 14,
+            background: "rgba(0,0,0,0.22)",
+            border: "1px solid rgba(255,255,255,0.10)",
+          }}
+        >
+          <div style={{ fontWeight: 800, fontSize: 14 }}>Recovery</div>
+          <div style={{ fontSize: 11, opacity: 0.55, marginTop: 3, lineHeight: 1.4 }}>
+            Live event recovery tools. Actions are ordered by blast radius — least to most destructive.
+          </div>
+
+          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
+            {/* 1 — lightest */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <button
+                onClick={() => setRecoveryModal("resetTimers")}
+                disabled={!canAct}
+                style={{ ...adminBtnSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
+                title="Recompute 5-min reporting windows using competition time"
+              >
+                Reset Reporting Timers
+              </button>
+              <div style={{ fontSize: 10, opacity: 0.45, paddingLeft: 2 }}>Timers only — no queue changes</div>
+            </div>
+
+            {/* 2 — medium */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <button
+                onClick={() => setRecoveryModal("resetEventState")}
+                disabled={!canAct}
+                style={{ ...adminBtnDng, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
+                title="Return event to PLANNING and clear all live queue/timer/pause state"
+              >
+                Reset Event State
+              </button>
+              <div style={{ fontSize: 10, opacity: 0.45, paddingLeft: 2 }}>Wipes queues + clocks — keeps roster</div>
+            </div>
+
+            {/* 3 — rebuild from schedule */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <button
+                onClick={() => setRecoveryModal("rebuildBoard")}
+                disabled={!canAct}
+                style={{ ...adminBtnSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
+                title="Reconstruct pad queues from imported schedule slots"
+              >
+                Rebuild Board
+              </button>
+              <div style={{ fontSize: 10, opacity: 0.45, paddingLeft: 2 }}>Requires imported schedule</div>
+            </div>
+          </div>
+
+          {recoveryResult ? (
+            <div
+              style={{
+                marginTop: 10,
+                padding: "7px 10px",
+                borderRadius: 8,
+                fontSize: 12,
+                background: recoveryResult.ok ? "rgba(76,175,80,0.15)" : "rgba(198,40,40,0.15)",
+                border: `1px solid ${recoveryResult.ok ? "rgba(76,175,80,0.4)" : "rgba(198,40,40,0.4)"}`,
+                color: recoveryResult.ok ? "#a5d6a7" : "#f48fb1",
+              }}
+            >
+              {recoveryResult.ok ? "✅ " : "❌ "}{recoveryResult.msg}
+            </div>
+          ) : null}
+        </div>
 
         {/* =======================
             Ops Chat / Broadcast
@@ -3285,7 +3382,7 @@ export default function AdminPage() {
           >
             <div onClick={(e) => e.stopPropagation()} style={modalCard}>
               <div style={{ fontWeight: 800, fontSize: 18 }}>
-                Reset Event?
+                Clear Comm & Logs?
               </div>
               <div
                 style={{
@@ -3297,9 +3394,9 @@ export default function AdminPage() {
               >
                 {resetScope.clearAreas
                   ? "This will clear Ops Chat and DELETE ALL training areas. This cannot be undone."
-                  : "This will clear Ops Chat and (optionally) reset queues. This cannot be undone."}
-                <div style={{ marginTop: 8 }}>
-                  This resets selected data (chat/audit/queues/etc.). It does not change competition status unless you choose options that reset queues.
+                  : "Clears selected communication and log data. Does not affect event status, timers, or queues."}
+                <div style={{ marginTop: 8, opacity: 0.75 }}>
+                  To reset queues, timers, or event state use the Recovery panel below.
                 </div>
               </div>
 
@@ -3449,7 +3546,114 @@ export default function AdminPage() {
                   disabled={!canAct}
                   style={{ ...adminBtnSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
                 >
-                  Reset Event
+                  Clear Comm & Logs
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =======================
+            Recovery — Reset Reporting Timers confirm
+           ======================= */}
+        {recoveryModal === "resetTimers" && (
+          <div onClick={() => setRecoveryModal(null)} style={modalBackdrop}>
+            <div onClick={(e) => e.stopPropagation()} style={modalCard}>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>Reset Reporting Timers?</div>
+              <div style={{ marginTop: 10, opacity: 0.85, fontSize: 13, lineHeight: 1.45 }}>
+                For every pad that currently has a team in <b>NOW</b>, the 5-minute reporting
+                countdown will be recomputed fresh using competition time (accounting for any
+                pause accumulation).
+              </div>
+              <div style={{ marginTop: 8, opacity: 0.65, fontSize: 12, lineHeight: 1.4 }}>
+                Queue order, team assignments, completion history, and event status are not changed.
+                This is the safest recovery action.
+              </div>
+              <div style={{ marginTop: 18, display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button onClick={() => setRecoveryModal(null)} style={adminBtnSec}>Cancel</button>
+                <button
+                  onClick={() => doRecovery("resetTimers")}
+                  disabled={!canAct}
+                  style={{ ...adminBtnSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
+                >
+                  Reset Timers
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =======================
+            Recovery — Reset Event State confirm
+           ======================= */}
+        {recoveryModal === "resetEventState" && (
+          <div onClick={() => setRecoveryModal(null)} style={modalBackdrop}>
+            <div onClick={(e) => e.stopPropagation()} style={modalCard}>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>Reset Event State?</div>
+              <div style={{ marginTop: 10, opacity: 0.85, fontSize: 13, lineHeight: 1.45 }}>
+                Returns the event to <b>PLANNING</b> and clears all live runtime state:
+              </div>
+              <ul style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6, paddingLeft: 18, opacity: 0.8 }}>
+                <li>Event status, start time, and all pause accumulation</li>
+                <li>All pad queues (NOW / ON DECK / STANDBY)</li>
+                <li>All report timers, arrival state, and break state</li>
+                <li>All scheduled slot completion records (reset to PLANNED)</li>
+                <li>Global break state</li>
+              </ul>
+              <div style={{ marginTop: 8, opacity: 0.65, fontSize: 12, lineHeight: 1.4 }}>
+                <b>Preserved:</b> Roster data, pad definitions (name / label), schedule events,
+                and slot definitions. Ops Chat is not cleared — use Clear Comm &amp; Logs for that.
+              </div>
+              <div style={{ marginTop: 8, padding: "7px 10px", borderRadius: 8, background: "rgba(198,40,40,0.16)", border: "1px solid rgba(198,40,40,0.4)", color: "#f48fb1", fontSize: 12 }}>
+                This cannot be undone.
+              </div>
+              <div style={{ marginTop: 18, display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button onClick={() => setRecoveryModal(null)} style={adminBtnSec}>Cancel</button>
+                <button
+                  onClick={() => doRecovery("resetEventState")}
+                  disabled={!canAct}
+                  style={{ ...adminBtnDng, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
+                >
+                  Reset Event State
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =======================
+            Recovery — Rebuild Board confirm
+           ======================= */}
+        {recoveryModal === "rebuildBoard" && (
+          <div onClick={() => setRecoveryModal(null)} style={modalBackdrop}>
+            <div onClick={(e) => e.stopPropagation()} style={modalCard}>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>Rebuild Board?</div>
+              <div style={{ marginTop: 10, opacity: 0.85, fontSize: 13, lineHeight: 1.45 }}>
+                Reconstructs all pad queues from the imported schedule. For each pad, slots
+                with status <b>PLANNED / READY / ON_DECK / ON_PAD / HELD</b> are loaded into
+                NOW / ON DECK / STANDBY in slot order. Slots marked COMPLETE, SCRATCHED, or
+                SKIPPED are excluded.
+              </div>
+              <div style={{ marginTop: 8, opacity: 0.75, fontSize: 12, lineHeight: 1.5 }}>
+                Arrival, break, and timer state are cleared. If the event is LIVE a fresh
+                5-minute report timer starts for each pad&apos;s NOW team.
+              </div>
+              <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: "rgba(255,152,0,0.12)", border: "1px solid rgba(255,152,0,0.35)", color: "rgba(255,200,100,0.95)", fontSize: 12, lineHeight: 1.5 }}>
+                <b>Slots already marked COMPLETE will not be re-queued.</b> If you want a
+                fully clean restart — including re-running completed teams — run{" "}
+                <b>Reset Event State</b> first to reset all slot statuses, then run Rebuild Board.
+              </div>
+              <div style={{ marginTop: 8, padding: "7px 10px", borderRadius: 8, background: "rgba(198,40,40,0.16)", border: "1px solid rgba(198,40,40,0.4)", color: "#f48fb1", fontSize: 12 }}>
+                Overwrites current queue state. Cannot be undone.
+              </div>
+              <div style={{ marginTop: 18, display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button onClick={() => setRecoveryModal(null)} style={adminBtnSec}>Cancel</button>
+                <button
+                  onClick={() => doRecovery("rebuildBoard")}
+                  disabled={!canAct}
+                  style={{ ...adminBtnSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
+                >
+                  Rebuild Board
                 </button>
               </div>
             </div>

@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for caccdrillboard on 2026-03-04T18:25:34-08:00
+# fly.toml app configuration file generated for drillboard on 2026-03-14T11:21:11-07:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'caccdrillboard'
+app = 'drillboard'
 primary_region = 'lax'
 
 [build]
@@ -22,6 +22,5 @@ primary_region = 'lax'
 
 [[vm]]
   memory = '1gb'
-  cpu_kind = 'shared'
   cpus = 1
   memory_mb = 1024

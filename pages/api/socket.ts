@@ -5,7 +5,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { Server as IOServer } from "socket.io";
 
 import type { BoardState, Pad, Team, PadStatus, ScheduleEvent, CycleStats, ScheduleSlot, SlotStatus, TeamDetail, TeamMember } from "@/lib/state";
-import { createInitialState, createPad } from "@/lib/state";
+import { createInitialState, createPad, getCompetitionNowMs } from "@/lib/state";
 import { buildStateFromRosterCsv, getRosterPath } from "@/lib/roster";
 import { parseCookie } from "@/lib/ui";
 import { verifyRoleCookie } from "@/lib/auth";
@@ -206,8 +206,29 @@ function isArrivedForNow(pad: Pad): boolean {
 }
 
 function startReportTimerForNow(pad: Pad, nowMs: number) {
+  // Deadline must be in competition-time space, not wall-clock space.
+  // effectiveNow on the client = realNow - eventPausedAccumMs.
+  // If we store the deadline in wall-clock time but read it against competition
+  // time, every accumulated pause minute inflates the displayed countdown by
+  // the same amount (e.g. 60-min pause → timer shows 65:00 instead of 5:00).
+  const state = G.boardState as BoardState | null;
+  const compNowMs = state ? (getCompetitionNowMs(state, nowMs) ?? nowMs) : nowMs;
+  const accum = (state as any)?.eventPausedAccumMs ?? 0;
+
   pad.reportByTeamId = pad.now?.id ?? null;
-  pad.reportByDeadlineAt = pad.now ? nowMs + REPORT_WINDOW_MS : null;
+  pad.reportByDeadlineAt = pad.now ? compNowMs + REPORT_WINDOW_MS : null;
+
+  console.log(
+    "[REPORT_TIMER] startReportTimerForNow",
+    "pad=", pad.id,
+    "team=", pad.now?.name ?? "—",
+    "wallNow=", nowMs,
+    "compNow=", compNowMs,
+    "pausedAccumMs=", accum,
+    "deadlineAt=", pad.reportByDeadlineAt,
+    "windowSec=", REPORT_WINDOW_MS / 1000,
+  );
+
   setStatus(pad, pad.now ? "REPORTING" : "IDLE", nowMs);
 }
 
@@ -1208,6 +1229,203 @@ export default function handler(req: NextApiRequest, res: NextResWithSocket) {
       });
 
       // =========================
+      // ADMIN: RECOVERY ACTIONS
+      // Three targeted recovery operations with explicit blast radii.
+      // Each emits back via emitState() so all connected clients refresh.
+      // =========================
+      type RecoveryAck = (arg: { ok: boolean; error?: string; detail?: string }) => void;
+
+      // ── 1. Reset Reporting Timers ─────────────────────────────────────────
+      // Lightest action. For every pad that currently has a team in NOW,
+      // recomputes reportByDeadlineAt = competitionNow + 5 min using
+      // getCompetitionNowMs (not wall-clock), so eventPausedAccumMs is
+      // accounted for correctly. Queue order and history are untouched.
+      socket.on("admin:recovery:resetTimers", (_payload: any, ack?: RecoveryAck) => {
+        const sendAck = (ok: boolean, error?: string, detail?: string) => { try { ack?.({ ok, error, detail }); } catch {} };
+        if ((socket as any).data?.role !== "admin") { sendAck(false, "Not authorized"); return; }
+        if (!G.boardState) { sendAck(false, "No board state"); return; }
+
+        const nowMs = Date.now();
+        const state = G.boardState as BoardState;
+        let count = 0;
+
+        for (const pad of state.pads ?? []) {
+          if (pad.now) {
+            // startReportTimerForNow uses getCompetitionNowMs internally
+            startReportTimerForNow(pad, nowMs);
+            count++;
+            console.log(
+              "[RECOVERY:resetTimers] pad=", pad.id,
+              "team=", pad.now.name,
+              "newDeadlineAt=", pad.reportByDeadlineAt,
+              "wallNow=", nowMs,
+            );
+          }
+        }
+
+        state.updatedAt = nowMs;
+        const detail = `Reset report timers on ${count} pad(s).`;
+        pushAudit({ ts: nowMs, padId: null, action: "RECOVERY_RESET_TIMERS", detail });
+        emitState();
+        console.log("[RECOVERY:resetTimers] OK count=", count);
+        sendAck(true, undefined, detail);
+      });
+
+      // ── 2. Reset Event State ──────────────────────────────────────────────
+      // Returns the event to PLANNING and wipes all live runtime state:
+      // event lifecycle (status/pause accumulation/start time), all pad
+      // queues and timers, global break state, and scheduled slot completion
+      // records. Preserves: roster (teamDetails), pad definitions (name/id),
+      // schedule events, and scheduledSlot definitions (statuses reset only).
+      socket.on("admin:recovery:resetEventState", (_payload: any, ack?: RecoveryAck) => {
+        const sendAck = (ok: boolean, error?: string, detail?: string) => { try { ack?.({ ok, error, detail }); } catch {} };
+        if ((socket as any).data?.role !== "admin") { sendAck(false, "Not authorized"); return; }
+        if (!G.boardState) { sendAck(false, "No board state"); return; }
+
+        const nowMs = Date.now();
+        const state = G.boardState as BoardState;
+
+        // Reset event lifecycle — clears pause accumulation so competition
+        // clocks start fresh if the event is re-started.
+        (state as any).eventStatus = "PLANNING";
+        (state as any).eventStartAt = null;
+        (state as any).eventPaused = false;
+        (state as any).eventPausedAt = null;
+        (state as any).eventPausedAccumMs = 0;
+
+        // Reset global break and any active message. Both are live operational
+        // state that has no meaning once the event returns to PLANNING.
+        state.globalBreakStartAt = null;
+        state.globalBreakUntilAt = null;
+        state.globalBreakReason = null;
+        state.globalMessage = null;
+        state.globalMessageUntilAt = null;
+
+        // Clear cycle timing stats. These accumulate actual run durations during
+        // a competition and are used for ETA estimates on the public board. Carrying
+        // them into a fresh event run would seed estimates with stale data from the
+        // previous event's teams and conditions, which could be misleading.
+        state.cycleStatsByPad = {};
+        state.cycleStatsByKey = {};
+        state.avgCycleSecondsByPad = {};
+
+        // Reset all pad queue and timer state. Pad definitions (id/name/label)
+        // are deliberately preserved so areas don't need to be recreated.
+        const padCount = (state.pads ?? []).length;
+        for (const pad of state.pads ?? []) {
+          pad.now = null;
+          pad.onDeck = null;
+          pad.standby = [];
+          pad.note = "";
+          pad.status = "IDLE";
+          pad.nowArrivedAt = null;
+          pad.nowArrivedTeamId = null;
+          pad.runStartedAt = null;
+          pad.lastRunEndedAt = null;
+          pad.lastCompleteAt = null;
+          pad.reportByDeadlineAt = null;
+          pad.reportByTeamId = null;
+          pad.breakUntilAt = null;
+          pad.breakReason = null;
+          pad.breakStartAt = null;
+          pad.message = null;
+          pad.messageUntilAt = null;
+          pad.updatedAt = nowMs;
+          console.log("[RECOVERY:resetEventState] cleared pad=", pad.id, pad.name ?? "");
+        }
+
+        // Reset scheduled slot statuses back to PENDING and clear actual
+        // timing fields so the schedule is ready for a fresh run.
+        // SCRATCHED slots are intentional and remain unchanged.
+        let slotCount = 0;
+        if (state.scheduledSlots) {
+          for (const sl of state.scheduledSlots) {
+            if (sl.status !== "SCRATCHED") {
+              sl.status = "PLANNED";
+              sl.actualStartMs = undefined;
+              sl.actualEndMs = undefined;
+              slotCount++;
+            }
+          }
+        }
+
+        state.updatedAt = nowMs;
+        const detail = `Reset to PLANNING. Cleared ${padCount} pad(s), ${slotCount} slot status(es), cycle stats, global break, and global message. eventPausedAccumMs reset to 0.`;
+        pushAudit({ ts: nowMs, padId: null, action: "RECOVERY_RESET_EVENT_STATE", detail });
+        emitState();
+        console.log("[RECOVERY:resetEventState] OK", detail);
+        sendAck(true, undefined, detail);
+      });
+
+      // ── 3. Rebuild Board ──────────────────────────────────────────────────
+      // Reconstructs live pad queues from scheduledSlots — the authoritative
+      // import data. Active slots (not COMPLETE / SCRATCHED / SKIPPED) are
+      // loaded into NOW / ON DECK / STANDBY in ascending slotOrder.
+      // Arrival and timer state is cleared; if the event is LIVE a fresh
+      // 5-minute report timer starts in competition-time space.
+      // No-op if no schedule has been imported.
+      socket.on("admin:recovery:rebuildBoard", (_payload: any, ack?: RecoveryAck) => {
+        const sendAck = (ok: boolean, error?: string, detail?: string) => { try { ack?.({ ok, error, detail }); } catch {} };
+        if ((socket as any).data?.role !== "admin") { sendAck(false, "Not authorized"); return; }
+        if (!G.boardState) { sendAck(false, "No board state"); return; }
+
+        const nowMs = Date.now();
+        const state = G.boardState as BoardState;
+        const isLive = state.eventStatus === "LIVE";
+
+        if (!state.scheduledSlots || state.scheduledSlots.length === 0) {
+          sendAck(false, "No scheduled slots to rebuild from. Import a schedule first.");
+          return;
+        }
+
+        let rebuiltPads = 0;
+        for (const pad of state.pads ?? []) {
+          const activeSlots = getActiveSlotsForPad(state, pad.id);
+          const remaining = [...activeSlots];
+          const firstSlot = remaining.shift();
+
+          pad.now = firstSlot ? slotToTeam(firstSlot) : null;
+          pad.onDeck = remaining.length > 0 ? slotToTeam(remaining.shift()!) : null;
+          pad.standby = remaining.map(slotToTeam);
+
+          // Clear all runtime state — rebuild is a clean reconciliation.
+          clearArrivalForNow(pad);
+          pad.reportByDeadlineAt = null;
+          pad.reportByTeamId = null;
+          pad.breakUntilAt = null;
+          pad.breakStartAt = null;
+          pad.breakReason = null;
+          pad.message = null;
+          pad.messageUntilAt = null;
+          pad.note = "";
+
+          if (isLive && pad.now) {
+            // startReportTimerForNow uses competition time, not wall-clock
+            startReportTimerForNow(pad, nowMs);
+          } else {
+            pad.status = pad.now ? "REPORTING" : "IDLE";
+          }
+
+          pad.updatedAt = nowMs;
+          rebuiltPads++;
+          console.log(
+            "[RECOVERY:rebuildBoard] pad=", pad.id,
+            "now=", pad.now?.name ?? "—",
+            "onDeck=", pad.onDeck?.name ?? "—",
+            "standby=", pad.standby.length,
+            "activeSlots=", activeSlots.length,
+          );
+        }
+
+        state.updatedAt = nowMs;
+        const detail = `Rebuilt ${rebuiltPads} pad(s) from ${state.scheduledSlots.length} slot(s).`;
+        pushAudit({ ts: nowMs, padId: null, action: "RECOVERY_REBUILD_BOARD", detail });
+        emitState();
+        console.log("[RECOVERY:rebuildBoard] OK", detail);
+        sendAck(true, undefined, detail);
+      });
+
+      // =========================
       // ADMIN: AREA CRUD
       // =========================
       socket.on("admin:pad:add", (payload: any) => {
@@ -1801,6 +2019,16 @@ export default function handler(req: NextApiRequest, res: NextResWithSocket) {
 
         clearArrivalForNow(pad);
         pad.breakStartAt = null;
+
+        console.log(
+          "[QUEUE_TRANSITION] judge:complete",
+          "pad=", padId,
+          "completed=", prevNowName,
+          "newNow=", pad.now?.name ?? "—",
+          "newOnDeck=", pad.onDeck?.name ?? "—",
+          "standbyLen=", pad.standby.length,
+          "durationSec=", durationSec,
+        );
 
         startReportTimerForNow(pad, nowMs);
 
