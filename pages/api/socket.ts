@@ -4,7 +4,7 @@ export const config = { api: { bodyParser: false } };
 import type { NextApiRequest, NextApiResponse } from "next";
 import { Server as IOServer } from "socket.io";
 
-import type { BoardState, Pad, Team, PadStatus, ScheduleEvent, CycleStats } from "@/lib/state";
+import type { BoardState, Pad, Team, PadStatus, ScheduleEvent, CycleStats, ScheduleSlot, SlotStatus, TeamDetail, TeamMember } from "@/lib/state";
 import { createInitialState, createPad } from "@/lib/state";
 import { buildStateFromRosterCsv, getRosterPath } from "@/lib/roster";
 import { parseCookie } from "@/lib/ui";
@@ -467,6 +467,62 @@ function sanitizeStateAfterAnyLoad(state: BoardState) {
   state.updatedAt = nowMs;
 }
 
+/** ---------- schedule order helpers ---------- */
+
+/** Returns slots for a pad in ascending slotOrder, excluding terminal statuses. */
+function getActiveSlotsForPad(state: BoardState, padId: number): ScheduleSlot[] {
+  if (!state.scheduledSlots) return [];
+  return state.scheduledSlots
+    .filter(
+      (sl) =>
+        sl.padId === padId &&
+        sl.status !== "COMPLETE" &&
+        sl.status !== "SCRATCHED" &&
+        sl.status !== "SKIPPED"
+    )
+    .sort((a, b) => a.slotOrder - b.slotOrder);
+}
+
+/** Converts a ScheduleSlot to a Team for the live queue. */
+function slotToTeam(sl: ScheduleSlot): Team {
+  return {
+    id: sl.teamId,
+    name: sl.teamName,
+    unit: sl.brigade,
+    category: sl.category,
+    division: sl.division as any,
+  };
+}
+
+/**
+ * After any queue advancement, re-sorts pad.standby by slotOrder so schedule
+ * order is preserved even if manual moves happened. Also promotes to onDeck if empty.
+ * No-op when no schedule is imported.
+ */
+function enforceScheduleOrder(pad: Pad, state: BoardState) {
+  if (!state.scheduledSlots || state.scheduledSlots.length === 0) return;
+
+  const activeSlots = getActiveSlotsForPad(state, pad.id);
+  if (activeSlots.length === 0) return;
+
+  // Build slotOrder lookup for any team currently in the queue
+  const orderMap = new Map<string, number>(activeSlots.map((sl) => [sl.teamId, sl.slotOrder]));
+
+  // Re-sort standby: scheduled teams by slotOrder, then unscheduled at end
+  if (pad.standby.length > 1) {
+    pad.standby = pad.standby.slice().sort((a, b) => {
+      const oa = orderMap.get(a.id) ?? Infinity;
+      const ob = orderMap.get(b.id) ?? Infinity;
+      return oa - ob;
+    });
+  }
+
+  // If onDeck is missing but standby has someone, promote them
+  if (!pad.onDeck && pad.standby.length > 0) {
+    pad.onDeck = pad.standby.shift() ?? null;
+  }
+}
+
 /** ---------- participant insertion helper ---------- */
 function insertTeamIntoPad(pad: Pad, nowMs: number, where: "NOW" | "ONDECK" | "END", team: Team, state?: BoardState) {
   if (where === "NOW") {
@@ -556,7 +612,7 @@ function getCommSnapshot(): CommSnapshot {
     const id = Number(p.id);
     const viewers = padViewers.get(id);
     const online = !!(viewers && viewers.size > 0);
-    const name = `Pad ${id}`;
+    const name = p.name || `Pad ${id}`;
     const messages = (channels[id] ?? []).slice(-120);
     return { padId: id, name, online, messages };
   });
@@ -641,7 +697,11 @@ export default function handler(req: NextApiRequest, res: NextResWithSocket) {
       // send comm snapshot to new connection
       socket.emit("comm:snapshot", getCommSnapshot());
 
-      // Wrap socket.on so handlers don't crash the connection on error
+      // Wrap socket.on so handlers don't crash the connection on error.
+      // NOTE: Use originalOn directly for any handler that uses Socket.IO ack callbacks,
+      // because the wrapper catches exceptions but does NOT forward the ack — meaning an
+      // uncaught exception inside a wrapped handler silently swallows the ack and the
+      // client hangs. Handlers with acks must do their own try/catch.
       const originalOn = socket.on.bind(socket);
       (socket as any).on = (event: string, handler: (...args: any[]) => void) => {
         originalOn(event, (...args: any[]) => {
@@ -652,6 +712,8 @@ export default function handler(req: NextApiRequest, res: NextResWithSocket) {
           }
         });
       };
+
+      console.log("[socket] connection established. role=", (socket as any).data?.role, "id=", socket.id);
 
       socket.on("getState", () => {
         loadStateIfNeeded();
@@ -1724,6 +1786,7 @@ export default function handler(req: NextApiRequest, res: NextResWithSocket) {
         const durationSec = runStart ? (nowMs - runStart) / 1000 : null;
 
         const prevNowName = pad.now?.name ?? "—";
+        const prevNowId = pad.now?.id ?? null;
 
         pad.lastCompleteAt = nowMs;
         pad.lastRunEndedAt = nowMs;
@@ -1742,6 +1805,18 @@ export default function handler(req: NextApiRequest, res: NextResWithSocket) {
         startReportTimerForNow(pad, nowMs);
 
         if (durationSec !== null) updateCycleStats(state, pad, durationSec, nowMs);
+
+        // Re-enforce schedule order after queue advancement
+        enforceScheduleOrder(pad, state);
+
+        // Track actual end on imported schedule slot
+        if (state.scheduledSlots && prevNowId) {
+          const slot = state.scheduledSlots.find(
+            (sl) => sl.padId === padId && sl.teamId === prevNowId &&
+              sl.status !== "SCRATCHED" && sl.status !== "SKIPPED"
+          );
+          if (slot) { slot.actualEndMs = nowMs; slot.status = "COMPLETE"; }
+        }
 
         state.updatedAt = nowMs;
 
@@ -1828,7 +1903,33 @@ export default function handler(req: NextApiRequest, res: NextResWithSocket) {
 
         snapshotForUndo(padId);
         markArrived(pad, nowMs);
-        (G.boardState as BoardState).updatedAt = nowMs;
+        const state = G.boardState as BoardState;
+        state.updatedAt = nowMs;
+
+        // Track actual start on imported schedule slot
+        if (state.scheduledSlots && pad.now) {
+          const teamId = pad.now.id;
+          const slot = state.scheduledSlots.find(
+            (sl) => sl.padId === padId && sl.teamId === teamId &&
+              sl.status !== "COMPLETE" && sl.status !== "SCRATCHED" && sl.status !== "SKIPPED"
+          );
+          if (slot) { slot.actualStartMs = nowMs; slot.status = "ON_PAD"; }
+        }
+
+        // Check schedule order: warn if there are earlier-order slots not yet started
+        if (state.scheduledSlots && pad.now) {
+          const activeSlots = getActiveSlotsForPad(state, padId);
+          const nowTeamId = pad.now.id;
+          const nowSlot = activeSlots.find((sl) => sl.teamId === nowTeamId);
+          const expectedNext = activeSlots[0] ?? null;
+
+          if (nowSlot && expectedNext && expectedNext.teamId !== nowTeamId) {
+            // There is an earlier-order slot that hasn't run yet — warn judge
+            const msg = `OUT OF ORDER: ${pad.now.name} (slot #${nowSlot.slotOrder}) is starting before ${expectedNext.teamName} (slot #${expectedNext.slotOrder}). Admin override required to continue.`;
+            socket.emit?.("judge:orderWarning", { padId, message: msg, nowTeamName: pad.now.name, nowSlotOrder: nowSlot.slotOrder, expectedTeamName: expectedNext.teamName, expectedSlotOrder: expectedNext.slotOrder });
+            pushAudit({ ts: nowMs, padId, action: "SCHEDULE_ORDER_VIOLATION", detail: msg });
+          }
+        }
 
         pushAudit({ ts: nowMs, padId, action: "ARRIVED", detail: "Marked arrived." });
         emitState();
@@ -2121,6 +2222,340 @@ export default function handler(req: NextApiRequest, res: NextResWithSocket) {
         state.updatedAt = nowMs;
 
         pushAudit({ ts: nowMs, padId: null, action: "SCHEDULE_DELETE", detail: `Deleted block: ${id}` });
+        emitState();
+      });
+
+      // =========================
+      // IMPORTED COMPETITION SCHEDULE (admin:schedule:import / admin:schedule:clear)
+      // Registered via originalOn (NOT socket.on) so the wrapper's catch block cannot
+      // swallow the ack callback. This handler manages its own try/catch.
+      // =========================
+      originalOn("admin:schedule:import", (payload: any, ack?: (res: { ok: boolean; error?: string; count?: number }) => void) => {
+        console.log("[schedImport] received payload");
+        console.log("[schedImport] ack type:", typeof ack);
+
+        // sendAck: always resolves ack, logs if ack is missing (would indicate client bug)
+        const sendAck = (ok: boolean, error?: string, count?: number) => {
+          if (typeof ack !== "function") {
+            console.warn("[schedImport] sendAck called but ack is not a function — client will not receive response");
+            return;
+          }
+          try {
+            ack({ ok, error, count });
+          } catch (e) {
+            console.error("[schedImport] ack() threw:", e);
+          }
+        };
+
+        console.log("[schedImport] received payload, role=", (socket as any).data?.role, "payload keys=", payload ? Object.keys(payload) : null);
+
+        if ((socket as any).data?.role !== "admin") {
+          console.warn("[admin:schedule:import] rejected: not admin");
+          sendAck(false, "Unauthorized"); return;
+        }
+
+        if (!G.boardState) {
+          console.error("[admin:schedule:import] rejected: no board state");
+          sendAck(false, "Server not ready — board state not initialized"); return;
+        }
+
+        try {
+          const state = G.boardState as BoardState;
+          const nowMs = Date.now();
+
+          // ── Flexible top-level detection ──────────────────────────────────
+          // Accept: { slots: [...] }  or  { schedule: [...] }  or  [...] directly
+          let rawSlots: unknown = payload?.slots ?? payload?.schedule ?? payload?.entries ?? payload?.data;
+          if (!rawSlots && Array.isArray(payload)) rawSlots = payload;
+
+          console.log("[schedImport] slots length:", Array.isArray(rawSlots) ? (rawSlots as any[]).length : "NOT_ARRAY", "type=", Array.isArray(rawSlots) ? "array" : typeof rawSlots);
+          console.log("[schedImport] pads in state:", state.pads.map((p) => p.id));
+
+          if (!Array.isArray(rawSlots) || rawSlots.length === 0) {
+            sendAck(false, `Invalid format: expected a non-empty array at 'slots', 'schedule', or root. Got keys: ${payload && typeof payload === "object" ? Object.keys(payload).join(", ") : typeof payload}`);
+            return;
+          }
+
+          // ── Per-slot normalization (accepts camelCase OR snake_case) ──────
+          const VALID_STATUSES: SlotStatus[] = ["PLANNED","READY","ON_DECK","ON_PAD","COMPLETE","SCRATCHED","HELD","SKIPPED"];
+          const parsed: ScheduleSlot[] = [];
+          const warnings: string[] = [];
+
+          for (let i = 0; i < rawSlots.length; i++) {
+            const s = rawSlots[i] as any;
+            if (!s || typeof s !== "object") { sendAck(false, `Slot[${i}] is not an object`); return; }
+
+            // Accept slotId / slot_id / id
+            const slotId = s.slotId ?? s.slot_id ?? s.id ?? s.slotID;
+            if (!slotId) { sendAck(false, `Slot[${i}] missing slotId (also tried slot_id, id). Keys present: ${Object.keys(s).join(", ")}`); return; }
+
+            // Accept padId / pad_id / pad / area / areaId / area_id — coerce string→number
+            const rawPadId = s.padId ?? s.pad_id ?? s.pad ?? s.area ?? s.areaId ?? s.area_id ?? s.ring ?? s.lane;
+            const padId = rawPadId != null ? Number(rawPadId) : NaN;
+            if (!Number.isFinite(padId) || !Number.isInteger(padId)) {
+              sendAck(false, `Slot[${i}] padId is missing or not an integer (value: ${JSON.stringify(rawPadId)}). Keys: ${Object.keys(s).join(", ")}`); return;
+            }
+
+            // Accept slotOrder / slot_order / order / sequence / position
+            const rawOrder = s.slotOrder ?? s.slot_order ?? s.order ?? s.sequence ?? s.position ?? s.index ?? i;
+            const slotOrder = Number(rawOrder);
+            if (!Number.isFinite(slotOrder)) { sendAck(false, `Slot[${i}] slotOrder is not a number`); return; }
+
+            // Accept teamId / team_id / competitorId / competitor_id / unitId / unit_id
+            const teamId = s.teamId ?? s.team_id ?? s.competitorId ?? s.competitor_id ?? s.unitId ?? s.unit_id;
+            if (!teamId) { sendAck(false, `Slot[${i}] missing teamId (also tried team_id, competitorId, unitId). Keys: ${Object.keys(s).join(", ")}`); return; }
+
+            // Accept teamName / team_name / competitorName / competitor_name / name / unitName
+            const teamName = s.teamName ?? s.team_name ?? s.competitorName ?? s.competitor_name ?? s.name ?? s.unitName ?? s.unit_name;
+            if (!teamName) { sendAck(false, `Slot[${i}] missing teamName (also tried team_name, name, competitorName). Keys: ${Object.keys(s).join(", ")}`); return; }
+
+            // Accept brigade / unit / org / organization / school
+            const brigade = s.brigade ?? s.unit ?? s.org ?? s.organization ?? s.school ?? s.corps;
+
+            // Accept anticipatedStart / anticipated_start / anticipatedStartTime / scheduledStart / scheduled_start / startTime / start_time
+            const anticipatedStart = s.anticipatedStart ?? s.anticipated_start ?? s.anticipatedStartTime ?? s.scheduledStart ?? s.scheduled_start ?? s.startTime ?? s.start_time ?? s.time;
+
+            const rawStatus = s.status ?? "PLANNED";
+            const status: SlotStatus = VALID_STATUSES.includes(String(rawStatus).toUpperCase() as SlotStatus)
+              ? (String(rawStatus).toUpperCase() as SlotStatus)
+              : VALID_STATUSES.includes(rawStatus)
+                ? rawStatus
+                : "PLANNED";
+
+            parsed.push({
+              slotId: String(slotId),
+              padId: Math.floor(padId),
+              slotOrder: Number(slotOrder),
+              teamId: String(teamId),
+              teamName: String(teamName),
+              brigade: brigade ? String(brigade) : undefined,
+              category: s.category ?? s.event ?? s.eventType ?? s.event_type ? String(s.category ?? s.event ?? s.eventType ?? s.event_type) : undefined,
+              division: s.division ?? s.div ? String(s.division ?? s.div) : undefined,
+              anticipatedStart: anticipatedStart ? String(anticipatedStart) : undefined,
+              status,
+            });
+          }
+
+          console.log(`[admin:schedule:import] validated ${parsed.length} slots. Warnings: ${warnings.length}`);
+
+          // ── Store schedule ────────────────────────────────────────────────
+          state.scheduledSlots = parsed;
+          state.scheduleImportedAt = nowMs;
+          state.scheduleEventName = payload?.eventName ?? payload?.event_name ?? payload?.name
+            ? String(payload?.eventName ?? payload?.event_name ?? payload?.name)
+            : undefined;
+          state.scheduleGeneratedBy = payload?.generatedBy ?? payload?.generated_by ?? payload?.source
+            ? String(payload?.generatedBy ?? payload?.generated_by ?? payload?.source)
+            : undefined;
+
+          console.log("[admin:schedule:import] state.scheduledSlots set. eventName=", state.scheduleEventName);
+
+          // ── Extract full team details (roster) for the inspection panel ────
+          // Key by BOTH the slot-level teamId (same value slotToTeam sets on Team.id)
+          // AND the nested team.teamId, so the client lookup always hits regardless of
+          // which field was used to build the queue entry.
+          const teamDetails: Record<string, TeamDetail> = {};
+          for (const s of rawSlots as any[]) {
+            // Slot-level teamId is the canonical queue identity (matches slotToTeam → Team.id)
+            const slotTeamId = String(s?.teamId ?? s?.team_id ?? "").trim();
+            const t = s?.team;
+            const nestedTeamId = String(t?.teamId ?? "").trim();
+
+            // Require at least one valid teamId
+            const primaryKey = slotTeamId || nestedTeamId;
+            if (!primaryKey) continue;
+
+            const members: TeamMember[] = [];
+            if (t && Array.isArray(t.members)) {
+              for (const m of t.members) {
+                members.push({
+                  memberId: String(m.memberId ?? ""),
+                  firstName: String(m.firstName ?? ""),
+                  lastName: String(m.lastName ?? ""),
+                  fullName: String(m.fullName ?? `${m.firstName ?? ""} ${m.lastName ?? ""}`).trim(),
+                  rank: String(m.rank ?? ""),
+                  grade: String(m.grade ?? ""),
+                  gender: String(m.gender ?? ""),
+                  role: m.role ? String(m.role) : null,
+                  notes: m.notes ? String(m.notes) : null,
+                  status: String(m.status ?? "ACTIVE"),
+                });
+              }
+            }
+            const detail: TeamDetail = {
+              teamId: primaryKey,
+              teamDisplayName: String(t?.teamDisplayName ?? t?.teamCode ?? s?.teamDisplayName ?? s?.teamName ?? ""),
+              brigade: t?.brigade ? String(t.brigade) : undefined,
+              brigadeNumber: t?.brigadeNumber != null ? Number(t.brigadeNumber) : undefined,
+              schoolName: t?.schoolName ? String(t.schoolName) : undefined,
+              unitName: t?.unitName ? String(t.unitName) : undefined,
+              teamNumber: t?.teamNumber != null ? Number(t.teamNumber) : undefined,
+              category: t?.category ? String(t.category) : (s?.category ? String(s.category) : undefined),
+              division: t?.division ? String(t.division) : (s?.division ? String(s.division) : undefined),
+              members,
+              notes: s.notes ? String(s.notes) : null,
+              warnings: Array.isArray(s.warnings) && s.warnings.length > 0 ? s.warnings.map(String) : undefined,
+              constraints: Array.isArray(s.constraints) && s.constraints.length > 0 ? s.constraints.map(String) : undefined,
+              sourceRowIds: Array.isArray(s.sourceRowIds) && s.sourceRowIds.length > 0 ? s.sourceRowIds.map(String) : undefined,
+            };
+            // Store under primary key (slot-level teamId preferred)
+            teamDetails[primaryKey] = detail;
+            // Also store under the nested team.teamId if it differs (belt-and-suspenders)
+            if (nestedTeamId && nestedTeamId !== primaryKey) {
+              teamDetails[nestedTeamId] = detail;
+            }
+          }
+          state.teamDetails = teamDetails;
+          const detailValues = Object.values(teamDetails);
+          const totalMembers = detailValues.reduce((n, d) => n + (d.members?.length ?? 0), 0);
+          const withRoster = detailValues.filter(d => (d.members?.length ?? 0) > 0).length;
+          console.log(`[admin:schedule:import] teamDetails: ${Object.keys(teamDetails).length} keys, ${withRoster}/${detailValues.length} teams have roster, ${totalMembers} total members`);
+
+          // ── Populate pad queues from schedule order ────────────────────────
+          const padIdsTouched = new Set(parsed.map((sl) => sl.padId));
+          console.log("[admin:schedule:import] padIdsTouched=", [...padIdsTouched], "known pads=", state.pads.map((p) => p.id));
+
+          // Build padId → human name map (pad label like "Pad 1" from export)
+          const padNameMap = new Map<number, string>();
+          if (Array.isArray(payload?.pads)) {
+            for (const p of payload.pads as any[]) {
+              const pid = Number(p?.padId ?? p?.pad_id);
+              const lbl = p?.padLabel ?? p?.pad_label ?? p?.name ?? p?.label;
+              if (Number.isFinite(pid) && lbl) padNameMap.set(pid, String(lbl));
+            }
+          }
+          for (const s of rawSlots as any[]) {
+            const pid = Number(s?.padId ?? s?.pad_id);
+            const lbl = s?.padLabel ?? s?.pad_label ?? s?.padName ?? s?.pad_name;
+            if (Number.isFinite(pid) && lbl && !padNameMap.has(pid)) {
+              padNameMap.set(pid, String(lbl));
+            }
+          }
+
+          // Build padId → category/division label (from first slot per pad)
+          const padCatMap = new Map<number, string>();
+          for (const sl of parsed) {
+            if (!padCatMap.has(sl.padId) && (sl.category || sl.division)) {
+              const parts = [sl.category, sl.division].filter(Boolean);
+              padCatMap.set(sl.padId, parts.join(" — "));
+            }
+          }
+
+          // Process pads in ascending id order so they appear in lane order
+          for (const padId of [...padIdsTouched].sort((a, b) => a - b)) {
+            console.log("[schedImport] seeding pad", padId);
+            let pad = getPadById(padId);
+            if (!pad) {
+              // Auto-create the pad from schedule data so areas appear immediately
+              const name = padNameMap.get(padId) ?? `Pad ${padId}`;
+              const label = padCatMap.get(padId) ?? "";
+              pad = createPad({ id: padId, nowMs, name, label, seedDemoTeams: false });
+              state.pads.push(pad);
+              state.nextPadId = Math.max(state.nextPadId ?? 1, padId + 1);
+              console.log(`[schedImport] auto-created pad ${padId}: name="${name}" label="${label}"`);
+            }
+
+            const activeSlots = getActiveSlotsForPad(state, padId);
+            if (activeSlots.length === 0) continue;
+
+            const arrivedActive = isArrivedForNow(pad);
+            const currentNowId = pad.now?.id ?? null;
+            const nowSlotMatch = currentNowId
+              ? activeSlots.find((sl) => sl.teamId === currentNowId) ?? null
+              : null;
+
+            let remaining: ScheduleSlot[];
+
+            if (nowSlotMatch && arrivedActive) {
+              remaining = activeSlots.filter((sl) => sl.teamId !== currentNowId);
+            } else {
+              remaining = activeSlots;
+              const first = remaining.shift();
+              pad.now = first ? slotToTeam(first) : null;
+              clearArrivalForNow(pad);
+              pad.reportByDeadlineAt = null;
+              pad.reportByTeamId = null;
+              const isLive = state.eventStatus === "LIVE";
+              if (isLive && pad.now) startReportTimerForNow(pad, nowMs);
+            }
+
+            pad.onDeck = remaining.length > 0 ? slotToTeam(remaining.shift()!) : null;
+            pad.standby = remaining.map(slotToTeam);
+            pad.updatedAt = nowMs;
+            console.log(`[admin:schedule:import] pad ${padId} queue seeded: now=${pad.now?.name ?? "—"} onDeck=${pad.onDeck?.name ?? "—"} standby=${pad.standby.length}`);
+          }
+
+          // Keep pads in ascending id order (matches laneOrder for display)
+          state.pads.sort((a, b) => a.id - b.id);
+          recomputeNextPadId(state);
+          state.updatedAt = nowMs;
+
+          pushAudit({ ts: nowMs, padId: null, action: "SCHEDULE_IMPORT", detail: `Imported ${parsed.length} slots across ${padIdsTouched.size} pads. Event: ${state.scheduleEventName ?? "—"}` });
+          emitState();
+
+          console.log("[schedImport] sending success ack, count=", parsed.length);
+          sendAck(true, undefined, parsed.length);
+
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error("[schedImport] ERROR:", e);
+          sendAck(false, `Server error: ${msg}`);
+        }
+      });
+      console.log("[schedImport] handler registered for socket", socket.id);
+
+      socket.on("admin:schedule:clearImport", (_payload: any, ack?: (res: { ok: boolean }) => void) => {
+        if ((socket as any).data?.role !== "admin") { try { ack?.({ ok: false }); } catch {} return; }
+        const state = G.boardState as BoardState;
+        const nowMs = Date.now();
+
+        state.scheduledSlots = undefined;
+        state.scheduleImportedAt = undefined;
+        state.scheduleEventName = undefined;
+        state.scheduleGeneratedBy = undefined;
+        state.teamDetails = undefined;
+        state.updatedAt = nowMs;
+
+        pushAudit({ ts: nowMs, padId: null, action: "SCHEDULE_IMPORT_CLEAR", detail: "Imported schedule cleared." });
+        emitState();
+        try { ack?.({ ok: true }); } catch {}
+      });
+
+      /**
+       * admin:schedule:overrideOrder — explicitly acknowledge an out-of-order start.
+       * Records the override in audit and reorders the schedule slots to reflect the
+       * new execution order (skips the "expected" earlier slot to end of PLANNED).
+       */
+      socket.on("admin:schedule:overrideOrder", (payload: any) => {
+        if ((socket as any).data?.role !== "admin") return;
+        const state = G.boardState as BoardState;
+        const nowMs = Date.now();
+
+        const padId = Number(payload?.padId);
+        const skipTeamId = String(payload?.skipTeamId ?? ""); // the earlier slot being bypassed
+        if (!padId || !skipTeamId) return;
+
+        if (state.scheduledSlots) {
+          // Mark the bypassed slot as SKIPPED so it no longer blocks order checks
+          const skipped = state.scheduledSlots.find(
+            (sl) => sl.padId === padId && sl.teamId === skipTeamId
+          );
+          if (skipped) {
+            skipped.status = "SKIPPED";
+            // Remove that team from the pad queue if still present
+            const pad = getPadById(padId);
+            if (pad) {
+              if (pad.onDeck?.id === skipTeamId) {
+                pad.onDeck = pad.standby.length > 0 ? pad.standby.shift() ?? null : null;
+              } else {
+                pad.standby = pad.standby.filter((t) => t.id !== skipTeamId);
+              }
+            }
+          }
+        }
+
+        state.updatedAt = nowMs;
+        pushAudit({ ts: nowMs, padId, action: "SCHEDULE_ORDER_OVERRIDE", detail: `Admin overrode order: skipped slot for team ${skipTeamId}` });
         emitState();
       });
 

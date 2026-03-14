@@ -9,6 +9,7 @@ export default function AdminLoginPage() {
   const [busy, setBusy] = useState(false);
 
   async function submit() {
+    if (!password || busy) return;
     setBusy(true);
     setErr(null);
     try {
@@ -25,7 +26,7 @@ export default function AdminLoginPage() {
       }
       window.location.href = "/admin";
     } catch {
-      setErr("Network error.");
+      setErr("Network error — check your connection.");
     } finally {
       setBusy(false);
     }
@@ -34,14 +35,14 @@ export default function AdminLoginPage() {
   return (
     <>
       <Head>
-        <title>Competition Matrix — Admin Login</title>
+        <title>Admin Login — CACC Competition</title>
       </Head>
 
       <main
-        className="responsive-page"
         style={{
           minHeight: "100vh",
-          background: "var(--cacc-navy)",
+          background:
+            "radial-gradient(900px 500px at 50% -100px, rgba(255,215,64,0.08), transparent 60%), var(--cacc-navy)",
           color: "white",
           display: "grid",
           placeItems: "center",
@@ -49,66 +50,47 @@ export default function AdminLoginPage() {
           fontFamily: "system-ui",
         }}
       >
-        <div
-          style={{
-            width: "min(520px, 92vw)",
-            borderRadius: 18,
-            background: "rgba(255,255,255,0.06)",
-            border: "1px solid rgba(255,255,255,0.12)",
-            padding: 18,
-            boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
-          }}
-        >
-          <div style={{ fontSize: 20, fontWeight: 1000 }}>Admin Login</div>
-          <div style={{ marginTop: 6, fontSize: 13, opacity: 0.8 }}>
-            Enter the admin password to access the Admin Console.
+        <div className="login-card">
+          {/* Brand */}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, textAlign: "center" }}>
+            <img
+              src="/cacc-shield.png"
+              alt="California Cadet Corps"
+              className="login-logo"
+            />
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, opacity: 0.6, textTransform: "uppercase", marginBottom: 6 }}>
+                California Cadet Corps
+              </div>
+              <h1 className="login-title">Admin Console</h1>
+              <p className="login-subtitle">Sign in to manage the competition.</p>
+            </div>
           </div>
 
+          {/* Form */}
           <input
+            className="login-input"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
             type="password"
             placeholder="Admin password"
-            style={{
-              marginTop: 14,
-              width: "100%",
-              padding: "12px 14px",
-              minHeight: 44,
-              borderRadius: 12,
-              border: "1px solid rgba(255,255,255,0.18)",
-              background: "rgba(0,0,0,0.25)",
-              color: "white",
-              outline: "none",
-              fontSize: 16,
-            }}
+            autoFocus
+            autoComplete="current-password"
           />
 
-          {err ? <div style={{ marginTop: 10, color: "#ffb4b4", fontWeight: 900 }}>{err}</div> : null}
+          {err && <div className="login-error">{err}</div>}
 
           <button
+            className="login-btn-primary"
             onClick={submit}
             disabled={busy || !password}
-            style={{
-              marginTop: 14,
-              width: "100%",
-              padding: "12px 14px",
-              minHeight: 44,
-              borderRadius: 12,
-              border: "1px solid rgba(255,255,255,0.18)",
-              background: "var(--cacc-gold)",
-              color: "#111",
-              fontWeight: 1000,
-              cursor: busy ? "not-allowed" : "pointer",
-              opacity: busy || !password ? 0.6 : 1,
-            }}
           >
             {busy ? "Signing in…" : "Sign In"}
           </button>
 
-          <div style={{ marginTop: 12, fontSize: 12, opacity: 0.75 }}>
-            <Link href="/login" style={{ color: "var(--cacc-gold)", textDecoration: "underline" }}>
-              ← Back to role chooser
-            </Link>
+          <div className="login-back-link">
+            <Link href="/">← Back to portal</Link>
           </div>
         </div>
       </main>

@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { BoardState, Pad, Team, ScheduleEvent } from "@/lib/state";
-import { getCompetitionNowMs } from "@/lib/state";
+import { getCompetitionNowMs, resolveAreaLabel } from "@/lib/state";
 import { getSocket } from "@/lib/socketClient";
 import { fmtTime, mmssFromSeconds, formatTimerForDisplay, chipStyle } from "@/lib/ui";
 
@@ -24,9 +24,9 @@ function schoolNameForDisplay(t?: Team | null): string {
   return name.replace(/\s*\([^)]*\)\s*$/, "").trim() || name;
 }
 
-/** Category from pad label (strip parenthetical, uppercase) */
-function categoryForDisplay(p: Pad): string {
-  const l = String(p.label ?? "").trim();
+/** Dynamic category label for public display: resolved from live queue, then schedule, then static label. */
+function categoryForDisplay(p: Pad, scheduledSlots?: import("@/lib/state").ScheduleSlot[]): string {
+  const l = resolveAreaLabel(p, scheduledSlots).trim();
   if (!l) return "";
   return l.replace(/\s*\([^)]*\)\s*$/, "").trim().toUpperCase();
 }
@@ -512,35 +512,43 @@ export default function PublicBoard({ kiosk = false }: { kiosk?: boolean }) {
         @keyframes lateFlash { 0%{opacity:1} 50%{opacity:.55} 100%{opacity:1} }
       `}</style>
 
-      {/* Event banner header - scoreboard style */}
+      {/* Event banner header — centered title block */}
       <div
         className="public-header"
         style={{
+          position: "relative",
           display: "flex",
-          gap: 24,
+          justifyContent: "center",
           alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          padding: "20px 24px",
+          padding: "22px 24px",
           borderRadius: 12,
           background: "rgba(255,255,255,0.06)",
           border: "1px solid rgba(255,255,255,0.12)",
           boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
         }}
       >
-        <div className="public-header-main">
+        {/* Centered logo + title block */}
+        <div
+          className="public-header-main"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 20,
+          }}
+        >
           <img
             src="/cacc-shield.png"
             alt="California Cadet Corps"
             className="public-header-logo"
             style={{
-              width: 80,
-              height: 80,
+              width: 96,
+              height: 96,
               objectFit: "contain",
-              borderRadius: 10,
+              borderRadius: 12,
               background: "rgba(0,0,0,0.25)",
               border: "1px solid rgba(255,255,255,0.14)",
               padding: 8,
+              flexShrink: 0,
             }}
           />
 
@@ -549,19 +557,17 @@ export default function PublicBoard({ kiosk = false }: { kiosk?: boolean }) {
             style={{
               display: "flex",
               flexDirection: "column",
-              alignItems: "center",
+              alignItems: "flex-start",
               gap: 4,
-              flex: 1,
-              minWidth: 0,
             }}
           >
             <div
               className="public-header-org"
               style={{
-                fontSize: 18,
+                fontSize: 20,
                 fontWeight: 900,
-                letterSpacing: 1.2,
-                opacity: 0.92,
+                letterSpacing: 1.6,
+                color: "rgba(255,255,255,0.80)",
                 lineHeight: 1.1,
               }}
             >
@@ -570,10 +576,11 @@ export default function PublicBoard({ kiosk = false }: { kiosk?: boolean }) {
             <div
               className="public-header-title"
               style={{
-                fontWeight: 1000,
-                fontSize: 32,
-                letterSpacing: -0.3,
-                lineHeight: 1.05,
+                fontWeight: 800,
+                fontSize: 38,
+                letterSpacing: -0.2,
+                lineHeight: 1.0,
+                color: "var(--text-primary, white)",
               }}
             >
               {(state as any)?.eventHeaderLabel?.trim() || "DRILL COMPETITION BOARD"}
@@ -581,16 +588,20 @@ export default function PublicBoard({ kiosk = false }: { kiosk?: boolean }) {
           </div>
         </div>
 
+        {/* Last Update — de-emphasized, bottom-right */}
         <div
           className="public-header-updated"
           style={{
-            fontSize: 13,
-            color: "var(--text-tertiary)",
+            position: "absolute",
+            bottom: 10,
+            right: 18,
+            fontSize: 11,
+            color: "rgba(255,255,255,0.35)",
             whiteSpace: "nowrap",
           }}
         >
           {state?.updatedAt
-            ? `Last Update: ${fmtTime(state.updatedAt)}`
+            ? `Updated ${fmtTime(state.updatedAt)}`
             : "Connecting…"}
         </div>
       </div>
@@ -617,7 +628,7 @@ export default function PublicBoard({ kiosk = false }: { kiosk?: boolean }) {
             SCHEDULE
           </span>
 
-          <div style={{ fontWeight: 950 }}>
+          <div style={{ fontWeight: 800 }}>
             NOW:{" "}
             {nowSched
               ? `${nowSched.title} (${fmtTime(nowSched.startAt)}–${fmtTime(nowSched.endAt)})`
@@ -686,7 +697,7 @@ export default function PublicBoard({ kiosk = false }: { kiosk?: boolean }) {
                     flexWrap: "wrap",
                   }}
                 >
-                  <div style={{ fontWeight: 950, fontSize: 16 }}>
+                  <div style={{ fontWeight: 800, fontSize: 16 }}>
                     {b.kind.includes("BREAK") ? "🟠 " : "📢 "}
                     {b.title}
                   </div>
@@ -744,11 +755,11 @@ export default function PublicBoard({ kiosk = false }: { kiosk?: boolean }) {
             No areas yet.
           </div>
         ) : (
-          pads.map((p) => {
+          pads.map((p, padIdx) => {
             const banner = getPadBanner(p, effectiveNow, globalBreakActive, isLive);
             const opStatus = getOpStatus(p, banner, effectiveNow, globalBreakActive);
             const timerInfo = getTimerInfo(p, banner, effectiveNow, opStatus);
-            const category = categoryForDisplay(p);
+            const category = categoryForDisplay(p, state?.scheduledSlots);
             const showNowCompeting = nowCompetingPads.has(p.id);
             const standbyCount = p.standby?.length ?? 0;
             const reportTargetDuringBreak =
@@ -801,41 +812,47 @@ export default function PublicBoard({ kiosk = false }: { kiosk?: boolean }) {
                 }}
               >
                 <div style={{ height: 4, background: borderColor }} />
-                {/* Header band */}
+                {/* Header band — category/division dominant, pad number secondary */}
                 <div
                   style={{
                     display: "flex",
-                    justifyContent: "space-between",
+                    flexDirection: "column",
                     alignItems: "center",
-                    padding: "0 24px",
-                    height: 60,
+                    justifyContent: "center",
+                    padding: "8px 20px",
+                    minHeight: 60,
                     background: "rgba(0,0,0,0.35)",
                     borderBottom: "1px solid var(--divider)",
+                    textAlign: "center",
+                    gap: 3,
                   }}
                 >
-                  <span
-                    style={{
-                      fontSize: 20,
-                      fontWeight: 1000,
-                      letterSpacing: 1.2,
-                      color: "var(--text-primary)",
-                    }}
-                  >
-                    PAD {p.id}
-                  </span>
                   {category ? (
                     <span
                       style={{
-                        fontSize: 15,
-                        fontWeight: 600,
-                        letterSpacing: "0.08em",
-                        color: COLOR_CATEGORY,
+                        fontSize: 17,
+                        fontWeight: 900,
+                        letterSpacing: "0.10em",
+                        color: "var(--text-primary)",
                         textTransform: "uppercase",
+                        lineHeight: 1.15,
                       }}
                     >
                       {category}
                     </span>
                   ) : null}
+                  <span
+                    style={{
+                      fontSize: category ? 11 : 20,
+                      fontWeight: category ? 500 : 800,
+                      letterSpacing: category ? 1.8 : 1.2,
+                      color: category ? "var(--text-tertiary)" : "var(--text-primary)",
+                      textTransform: "uppercase",
+                      lineHeight: 1,
+                    }}
+                  >
+                    PAD {padIdx + 1}
+                  </span>
                 </div>
 
                 <div className="public-pad-body" style={{ padding: 24 }}>

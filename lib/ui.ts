@@ -69,6 +69,27 @@ export function buttonStyle(opts: { bg: string; fg?: string; disabled?: boolean 
   };
 }
 
+/**
+ * Compact secondary action button — does NOT set width:100%.
+ * Use for inline actions like Inspect that should not stretch to fill a row.
+ */
+export function compactBtnStyle(opts: { bg?: string; fg?: string; disabled?: boolean } = {}) {
+  return {
+    padding: "5px 11px",
+    borderRadius: 8,
+    border: "1px solid rgba(255,255,255,0.13)",
+    background: opts.bg ?? "rgba(255,255,255,0.08)",
+    color: opts.fg ?? "rgba(255,255,255,0.82)",
+    fontWeight: 700 as const,
+    fontSize: 12,
+    cursor: opts.disabled ? "not-allowed" : "pointer",
+    opacity: opts.disabled ? 0.5 : 1,
+    letterSpacing: 0.3,
+    whiteSpace: "nowrap" as const,
+    flexShrink: 0 as const,
+  };
+}
+
 /* -------------------------
    Simple cookie helpers
 -------------------------- */

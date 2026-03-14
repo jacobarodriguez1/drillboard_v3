@@ -67,7 +67,6 @@ export default function Home() {
   }, []);
 
   const displayTitle = useMemo(() => getDisplayTitle(state), [state]);
-  const subtitle = loading ? "Loading event..." : "Select Portal";
 
   return (
     <>
@@ -76,11 +75,10 @@ export default function Home() {
       </Head>
 
       <main
-        className="responsive-page"
         style={{
           minHeight: "100vh",
           background:
-            "radial-gradient(1200px 600px at 50% -160px, rgba(255,215,64,0.10), transparent 60%), var(--cacc-navy)",
+            "radial-gradient(1200px 600px at 50% -160px, rgba(255,215,64,0.12), transparent 60%), var(--cacc-navy)",
           color: "white",
           display: "grid",
           placeItems: "center",
@@ -90,73 +88,108 @@ export default function Home() {
       >
         <section
           style={{
-            width: "min(780px, 100%)",
-            borderRadius: 18,
-            background: "rgba(255,255,255,0.06)",
-            border: "1px solid rgba(255,255,255,0.14)",
-            boxShadow: "0 14px 40px rgba(0,0,0,0.35)",
-            padding: "24px 20px",
+            width: "min(820px, 100%)",
+            borderRadius: 20,
+            background: "rgba(255,255,255,0.055)",
+            border: "1px solid rgba(255,255,255,0.13)",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.40)",
+            padding: "32px 28px",
             display: "flex",
             flexDirection: "column",
-            gap: 18,
+            gap: 28,
           }}
         >
-          <div style={{ display: "grid", placeItems: "center", gap: 12, textAlign: "center" }}>
+          {/* Header */}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, textAlign: "center" }}>
             <img
               src="/cacc-shield.png"
               alt="California Cadet Corps shield"
               style={{
-                width: "clamp(92px, 16vw, 132px)",
+                width: "clamp(72px, 13vw, 100px)",
                 height: "auto",
                 objectFit: "contain",
-                filter: "drop-shadow(0 8px 18px rgba(0,0,0,0.35))",
+                filter: "drop-shadow(0 6px 16px rgba(0,0,0,0.4))",
               }}
             />
-            <h1
+            <div>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: 1.8,
+                  opacity: 0.6,
+                  textTransform: "uppercase",
+                  marginBottom: 8,
+                }}
+              >
+                California Cadet Corps
+              </div>
+              <h1
+                style={{
+                  margin: 0,
+                  fontSize: "clamp(20px, 4vw, 32px)",
+                  lineHeight: 1.15,
+                  letterSpacing: 0.2,
+                  fontWeight: 800,
+                }}
+              >
+                {loading ? "Loading event…" : displayTitle}
+              </h1>
+              {loadError && (
+                <div style={{ marginTop: 6, fontSize: 12, opacity: 0.55 }}>
+                  Could not reach server — showing default title.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Divider */}
+          <div style={{ height: 1, background: "rgba(255,255,255,0.10)" }} />
+
+          {/* Portal cards */}
+          <div>
+            <div
               style={{
-                margin: 0,
-                fontSize: "clamp(22px, 4.2vw, 36px)",
-                lineHeight: 1.15,
-                letterSpacing: 0.3,
-                fontWeight: 1000,
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: 1.4,
+                opacity: 0.5,
+                textTransform: "uppercase",
+                textAlign: "center",
+                marginBottom: 14,
               }}
             >
-              {displayTitle}
-            </h1>
-            <div style={{ fontSize: 13, opacity: 0.8 }}>{subtitle}</div>
-            {loadError ? (
-              <div style={{ fontSize: 12, opacity: 0.75 }}>
-                Live title unavailable. Showing default event title.
-              </div>
-            ) : null}
+              Select Portal
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                gap: 12,
+              }}
+            >
+              <Link href="/public" className="portal-card" style={portalCardStyle("#1a4a85", "#2c6fba")}>
+                <span style={portalIconStyle}>📺</span>
+                <span style={portalLabelStyle}>Public Board</span>
+                <span style={portalDescStyle}>Live competition display for spectators and broadcast</span>
+              </Link>
+
+              <Link href="/judge/login" className="portal-card" style={portalCardStyle("#7a5a00", "#ffc72c")}>
+                <span style={portalIconStyle}>⚖️</span>
+                <span style={portalLabelStyle}>Judge Console</span>
+                <span style={portalDescStyle}>Operational control for assigned competition area</span>
+              </Link>
+
+              <Link href="/admin/login" className="portal-card" style={portalCardStyle("#1a1a2e", "#404060")}>
+                <span style={portalIconStyle}>⚙️</span>
+                <span style={portalLabelStyle}>Admin Console</span>
+                <span style={portalDescStyle}>Event management, roster, and full system control</span>
+              </Link>
+            </div>
           </div>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-              gap: 12,
-            }}
-          >
-            <Link href="/public" style={portalCardStyle("rgba(32,95,170,0.35)")}>
-              <span style={portalLabelStyle}>PUBLIC</span>
-              <span style={portalDescStyle}>View live competition status</span>
-            </Link>
-
-            <Link href="/judge/login" style={portalCardStyle("rgba(255,193,7,0.30)")}>
-              <span style={portalLabelStyle}>JUDGE</span>
-              <span style={portalDescStyle}>Enter scoring and judging tasks</span>
-            </Link>
-
-            <Link href="/admin/login" style={portalCardStyle("rgba(117,117,117,0.35)")}>
-              <span style={portalLabelStyle}>ADMIN</span>
-              <span style={portalDescStyle}>Control event settings and operations</span>
-            </Link>
-          </div>
-
-          <div style={{ textAlign: "center", fontSize: 12, opacity: 0.72 }}>
-            California Cadet Corps
-            <br />
+          {/* Footer */}
+          <div style={{ textAlign: "center", fontSize: 12, opacity: 0.45 }}>
             Competition Management System
           </div>
         </section>
@@ -165,7 +198,7 @@ export default function Home() {
   );
 }
 
-function portalCardStyle(accent: string): CSSProperties {
+function portalCardStyle(bgFrom: string, bgTo: string): CSSProperties {
   return {
     textDecoration: "none",
     color: "white",
@@ -173,24 +206,29 @@ function portalCardStyle(accent: string): CSSProperties {
     flexDirection: "column",
     gap: 8,
     borderRadius: 14,
-    minHeight: 116,
-    padding: "16px 14px",
-    border: "1px solid rgba(255,255,255,0.2)",
-    background: `linear-gradient(180deg, ${accent}, rgba(0,0,0,0.20))`,
-    boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
-    justifyContent: "center",
-    transition: "transform 120ms ease, border-color 120ms ease",
+    minHeight: 130,
+    padding: "18px 16px",
+    border: "1px solid rgba(255,255,255,0.16)",
+    background: `linear-gradient(160deg, ${bgFrom}, rgba(0,0,0,0.30))`,
+    boxShadow: "0 6px 20px rgba(0,0,0,0.30)",
+    justifyContent: "flex-start",
   };
 }
 
-const portalLabelStyle: CSSProperties = {
+const portalIconStyle: CSSProperties = {
   fontSize: 22,
+  lineHeight: 1,
+};
+
+const portalLabelStyle: CSSProperties = {
+  fontSize: 16,
   lineHeight: 1.1,
-  fontWeight: 1000,
-  letterSpacing: 0.4,
+  fontWeight: 800,
+  letterSpacing: 0.2,
 };
 
 const portalDescStyle: CSSProperties = {
-  fontSize: 13,
-  opacity: 0.88,
+  fontSize: 12,
+  opacity: 0.75,
+  lineHeight: 1.4,
 };

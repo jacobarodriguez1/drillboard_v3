@@ -106,7 +106,7 @@ export function PadHeader({
         <div
           style={{
             fontSize: v.padNameSize,
-            fontWeight: 1000,
+            fontWeight: 800,
             color: "var(--text-primary)",
           }}
         >
@@ -233,7 +233,7 @@ export function PadPrimarySection({
                 style={{
                   fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
                   fontSize: v.timerFontSize,
-                  fontWeight: 1100,
+                  fontWeight: 800,
                   color: "var(--text-primary)",
                 }}
               >
@@ -248,7 +248,7 @@ export function PadPrimarySection({
             style={{
               marginTop: 8,
               fontSize: v.padNameSize - 2,
-              fontWeight: 950,
+              fontWeight: 800,
               color: "var(--text-secondary)",
             }}
           >
@@ -259,7 +259,7 @@ export function PadPrimarySection({
           style={{
             marginTop: padMessage ? 8 : 10,
             fontSize: v.primaryFontSize,
-            fontWeight: 1000,
+            fontWeight: 800,
             lineHeight: 1.25,
             color: "var(--text-primary)",
           }}
@@ -337,7 +337,7 @@ export function PadOnDeckSection({
                   padding: "0 8px",
                   borderRadius: 4,
                   fontSize: 10,
-                  fontWeight: 1000,
+                  fontWeight: 800,
                   letterSpacing: 1,
                   background: "rgba(255,255,255,0.10)",
                   color: "var(--text-secondary)",
@@ -425,7 +425,7 @@ export function PadStandbySection({
                 padding: "0 8px",
                 borderRadius: 4,
                 fontSize: 10,
-                fontWeight: 1000,
+                fontWeight: 800,
                 letterSpacing: 1,
                 background: "rgba(255,255,255,0.06)",
                 color: "var(--text-tertiary)",

@@ -8,19 +8,18 @@ import type {
   ScheduleEvent,
   ScheduleType,
   ScheduleScope,
+  ScheduleSlot,
   Pad,
   Team,
+  TeamDetail,
 } from "@/lib/state";
-import { getCompetitionNowMs } from "@/lib/state";
+import { getCompetitionNowMs, resolveAreaLabel, resolveTeamDetail } from "@/lib/state";
 import { getSocket } from "@/lib/socketClient";
-import { fmtTime, buttonStyle, chipStyle } from "@/lib/ui";
+import { fmtTime, chipStyle } from "@/lib/ui";
 import { requireAdminRole } from "@/lib/auth";
-import {
-  PadPrimarySection,
-  PadOnDeckSection,
-  PadStandbySection,
-} from "@/components/PadLayout";
+// PadLayout section components not used in admin (Queue Manager uses inline sections)
 import { DateTimeField } from "@/components/DateTimeField";
+import TeamInspectionPanel, { type TeamInspectionContext } from "@/components/TeamInspectionPanel";
 
 const COLOR_ORANGE = "rgba(255,152,0,0.95)";
 const COLOR_YELLOW = "rgba(255,235,59,0.95)";
@@ -71,14 +70,109 @@ const flatInput: React.CSSProperties = {
   width: "100%",
 };
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   Admin button design system
+   • Status colors (yellow/red/green/orange) are RESERVED for operational chips:
+     REPORTING, LATE, ON PAD, BREAK — buttons must never use those colors.
+   • Buttons use muted translucent tones that sit back against the dark theme.
+   • Standard 34px | Small 30px — no button exceeds 40px
+   ──────────────────────────────────────────────────────────────────────────── */
+const _adminBtnBase: React.CSSProperties = {
+  height: 34,
+  padding: "0 12px",
+  borderRadius: 8,
+  fontSize: 13,
+  fontWeight: 600,
+  letterSpacing: 0.2,
+  flexShrink: 0,
+  whiteSpace: "nowrap",
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+/** Default slate — for secondary/neutral actions */
+const adminBtnSec: React.CSSProperties = {
+  ..._adminBtnBase,
+  background: "rgba(71,85,105,0.32)",
+  border: "1px solid rgba(148,163,184,0.22)",
+  color: "#E5E7EB",
+};
+/** Primary — muted desaturated indigo, reserved for key create/start actions */
+const adminBtnPri: React.CSSProperties = {
+  ..._adminBtnBase,
+  background: "rgba(79,70,229,0.42)",
+  border: "1px solid rgba(129,140,248,0.24)",
+  color: "#F8FAFC",
+};
+/** Destructive — restrained dark red */
+const adminBtnDng: React.CSSProperties = {
+  ..._adminBtnBase,
+  background: "rgba(127,29,29,0.60)",
+  border: "1px solid rgba(239,68,68,0.22)",
+  color: "#FEE2E2",
+};
+/** Small variants — 30px for inline/compact contexts */
+const adminBtnSmPri: React.CSSProperties = { ...adminBtnPri, height: 30, padding: "0 10px", fontSize: 12 };
+const adminBtnSmSec: React.CSSProperties = { ...adminBtnSec, height: 30, padding: "0 10px", fontSize: 12 };
+const adminBtnSmDng: React.CSSProperties = { ...adminBtnDng, height: 30, padding: "0 10px", fontSize: 12 };
+
+/* Queue Manager — compact 28px inline buttons for dense row layout */
+const qmBtnBase: React.CSSProperties = {
+  height: 28,
+  padding: "0 11px",
+  borderRadius: 7,
+  fontSize: 12,
+  fontWeight: 600,
+  letterSpacing: 0.2,
+  flexShrink: 0,
+  whiteSpace: "nowrap",
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+const qmBtnSec: React.CSSProperties = {
+  ...qmBtnBase,
+  background: "rgba(71,85,105,0.32)",
+  border: "1px solid rgba(148,163,184,0.22)",
+  color: "#D1D5DB",
+};
+const qmBtnPri: React.CSSProperties = {
+  ...qmBtnBase,
+  background: "rgba(79,70,229,0.42)",
+  border: "1px solid rgba(129,140,248,0.24)",
+  color: "#F8FAFC",
+};
+const qmBtnDng: React.CSSProperties = {
+  ...qmBtnBase,
+  background: "rgba(127,29,29,0.60)",
+  border: "1px solid rgba(239,68,68,0.22)",
+  color: "#FEE2E2",
+};
+const qmBtnIcon: React.CSSProperties = {
+  ...qmBtnBase,
+  padding: 0,
+  width: 24,
+  height: 24,
+  fontSize: 10,
+};
+
 const pillButton = (active = false): React.CSSProperties => ({
-  ...buttonStyle({
-    bg: active ? "rgba(255,215,64,0.18)" : "rgba(0,0,0,0.25)",
-    disabled: false,
-  }),
-  padding: "6px 10px",
+  height: 36,
+  padding: "0 14px",
   borderRadius: 999,
-  fontWeight: 900,
+  fontSize: 13,
+  fontWeight: 700,
+  cursor: "pointer",
+  background: active ? "rgba(37,99,235,0.22)" : "rgba(0,0,0,0.25)",
+  border: active ? "1px solid rgba(37,99,235,0.35)" : "1px solid rgba(255,255,255,0.10)",
+  color: active ? "#93C5FD" : "rgba(255,255,255,0.55)",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  whiteSpace: "nowrap" as const,
+  flexShrink: 0,
 });
 
 /* =======================
@@ -329,16 +423,23 @@ export default function AdminPage() {
   const [importError, setImportError] = useState<string | null>(null);
   const [importNote, setImportNote] = useState<string | null>(null);
 
+  // Import Competition Schedule (JSON from roster_chipper)
+  const schedImportRef = useRef<HTMLInputElement | null>(null);
+  const [schedImportError, setSchedImportError] = useState<string | null>(null);
+  const [schedImportNote, setSchedImportNote] = useState<string | null>(null);
+  const [schedImportLoading, setSchedImportLoading] = useState(false);
+
   // ✅ Queue Manager modal (linked NOW/ONDECK/STBY)
   const [queueModalPadId, setQueueModalPadId] = useState<number | null>(null);
   const [queueFocus, setQueueFocus] = useState<QueueFocus>("STANDBY");
 
   const [qmAddName, setQmAddName] = useState("");
-  const [qmAddId, setQmAddId] = useState("");
 
   const [qmEditOriginalId, setQmEditOriginalId] = useState<string | null>(null);
   const [qmEditName, setQmEditName] = useState("");
-  const [qmEditId, setQmEditId] = useState("");
+
+  const [inspectTeam, setInspectTeam] = useState<Team | null>(null);
+  const [inspectCtx, setInspectCtx] = useState<TeamInspectionContext | undefined>(undefined);
 
   /* =======================
      Admin comm state (pad-based channels)
@@ -596,12 +697,13 @@ export default function AdminPage() {
   // Pad health (admin only)
   const padHealth = useMemo(() => {
     const pads = state?.pads ?? [];
+    const slots = state?.scheduledSlots;
     return pads.map((p) => ({
       id: p.id,
-      label: p.label,
+      label: resolveAreaLabel(p, slots) || p.label,
       status: padOpsStatus(p, effectiveNow),
     }));
-  }, [state?.pads, effectiveNow]);
+  }, [state?.pads, state?.scheduledSlots, effectiveNow]);
 
   // Areas
   const areas = useMemo(
@@ -811,6 +913,84 @@ export default function AdminPage() {
     );
   };
 
+  // Competition Schedule import (JSON from roster_chipper)
+  const handleSchedImportFile = async (file: File | null) => {
+    setSchedImportError(null);
+    setSchedImportNote(null);
+    if (!file) return;
+
+    if (!/\.json$/i.test(file.name)) {
+      setSchedImportError("JSON only. Please upload a .json file from roster_chipper.");
+      return;
+    }
+
+    let parsed: any;
+    try {
+      const text = await file.text();
+      parsed = JSON.parse(text);
+    } catch {
+      setSchedImportError("Could not parse JSON. Make sure the file is valid JSON.");
+      return;
+    }
+
+    // Client-side: detect the slots array using the same flexible logic the server uses,
+    // so we can give a clear error before even emitting if the file is obviously wrong.
+    const rawSlots: unknown = Array.isArray(parsed)
+      ? parsed
+      : parsed?.slots ?? parsed?.schedule ?? parsed?.entries ?? parsed?.data;
+
+    console.log("[schedImport] file=", file.name, "parsed keys=", parsed && typeof parsed === "object" ? Object.keys(parsed) : typeof parsed, "rawSlots length=", Array.isArray(rawSlots) ? rawSlots.length : "not an array");
+
+    if (!Array.isArray(rawSlots) || rawSlots.length === 0) {
+      setSchedImportError(
+        `No slot array found in the JSON file. ` +
+        `The file must contain a "slots" key (or "schedule"/"entries"/"data") with a non-empty array, ` +
+        `or the root must be an array. ` +
+        `Found keys: ${parsed && typeof parsed === "object" ? Object.keys(parsed).join(", ") : typeof parsed}`
+      );
+      return;
+    }
+
+    if (!connected || !socket?.emit) {
+      setSchedImportError("Not connected to server. Check your connection and try again.");
+      return;
+    }
+
+    setSchedImportLoading(true);
+
+    // Safety timeout — if ack never arrives, clear loading state after 12 seconds
+    const timeoutId = setTimeout(() => {
+      console.error("[schedImport] ack timeout — server did not respond within 12s");
+      setSchedImportLoading(false);
+      setSchedImportError("Import timed out — server did not respond. Check server logs.");
+    }, 12000);
+
+    console.log("[schedImport] emitting admin:schedule:import, slot count=", Array.isArray(rawSlots) ? rawSlots.length : "?");
+
+    socket.emit!(
+      "admin:schedule:import",
+      { slots: rawSlots, eventName: parsed?.eventName ?? parsed?.event_name ?? parsed?.name, generatedBy: parsed?.generatedBy ?? parsed?.generated_by ?? parsed?.source },
+      (ack?: { ok: boolean; error?: string; count?: number }) => {
+        clearTimeout(timeoutId);
+        setSchedImportLoading(false);
+        console.log("[schedImport] ack received:", ack);
+        if (ack?.ok) {
+          setSchedImportNote(`Imported ${ack.count} slot(s) from ${file.name}.`);
+        } else {
+          setSchedImportError(ack?.error ?? "Import failed (server returned ok=false with no error message).");
+        }
+      }
+    );
+  };
+
+  const doClearSchedImport = () => {
+    setSchedImportError(null);
+    setSchedImportNote(null);
+    socket?.emit?.("admin:schedule:clearImport", {}, (ack?: { ok: boolean }) => {
+      if (ack?.ok) setSchedImportNote("Schedule cleared.");
+    });
+  };
+
   const globalBreakActive = useMemo(() => {
     const start = state?.globalBreakStartAt ?? null;
     const until = state?.globalBreakUntilAt ?? null;
@@ -833,53 +1013,68 @@ export default function AdminPage() {
     setQueueModalPadId(padId);
     setQueueFocus(focus);
     setQmAddName("");
-    setQmAddId("");
     setQmEditOriginalId(null);
     setQmEditName("");
-    setQmEditId("");
   };
 
   const closeQueueManager = () => {
     setQueueModalPadId(null);
     setQmAddName("");
-    setQmAddId("");
     setQmEditOriginalId(null);
     setQmEditName("");
-    setQmEditId("");
   };
+
+  const openInspect = (team: Team, ctx?: TeamInspectionContext) => {
+    // Diagnostic log — confirms whether teamDetails and scheduledSlots are populated
+    const slot = state?.scheduledSlots?.find((sl) => sl.teamId === team.id);
+    const directHit = state?.teamDetails?.[team.id];
+    console.log("[INSPECT_DEBUG]", {
+      entryId: team.id,
+      entryName: team.name,
+      matchedSlotId: slot?.slotId ?? null,
+      matchedSlotTeamId: slot?.teamId ?? null,
+      teamDetailsDirectHit: !!directHit,
+      memberCount: directHit?.members?.length ?? 0,
+      teamDetailsKeyCount: Object.keys(state?.teamDetails ?? {}).length,
+      sampleKeys: Object.keys(state?.teamDetails ?? {}).slice(0, 3),
+    });
+    setInspectTeam(team);
+    setInspectCtx(ctx);
+  };
+  const closeInspect = () => setInspectTeam(null);
+
+  const inspectDetail = useMemo((): TeamDetail | null => {
+    if (!inspectTeam) return null;
+    return resolveTeamDetail(inspectTeam, state);
+  }, [inspectTeam, state]);
 
   const startEdit = (teamId: string, name: string) => {
     setQmEditOriginalId(teamId);
-    setQmEditId(teamId);
     setQmEditName(name);
   };
 
   const cancelEdit = () => {
     setQmEditOriginalId(null);
     setQmEditName("");
-    setQmEditId("");
   };
 
   const saveEditTeam = (padId: number) => {
     if (!qmEditOriginalId) return;
     const name = qmEditName.trim();
-    const id = qmEditId.trim();
-    if (!name || !id) return;
+    if (!name) return;
     emit("admin:queue:updateTeam", {
       padId,
       teamId: qmEditOriginalId,
-      patch: { name, id },
+      patch: { name },
     });
     cancelEdit();
   };
 
   const qmAddToStandby = (padId: number) => {
     const name = qmAddName.trim();
-    const id = qmAddId.trim();
-    if (!name || !id) return;
-    emit("admin:team:add", { padId, where: "END", teamName: name, teamId: id });
+    if (!name) return;
+    emit("admin:team:add", { padId, where: "END", teamName: name });
     setQmAddName("");
-    setQmAddId("");
   };
 
   const qmMoveStandby = (padId: number, from: number, to: number) =>
@@ -1101,6 +1296,13 @@ export default function AdminPage() {
     setTimeout(() => setCommBusy(false), 250);
   };
 
+  async function logout() {
+    try {
+      await fetch("/api/admin-logout", { method: "POST" });
+    } catch {}
+    window.location.href = "/admin/login";
+  }
+
   const sendBroadcast = () => {
     setCommErr(null);
     const text = bcText.trim();
@@ -1205,51 +1407,33 @@ export default function AdminPage() {
             boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
           }}
         >
-          <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
             <img
               src="/cacc-shield.png"
               alt="California Cadet Corps"
-              style={{
-                width: 132,
-                height: 132,
-                objectFit: "contain",
-                borderRadius: 14,
-                background: "rgba(0,0,0,0.25)",
-                border: "1px solid rgba(255,255,255,0.14)",
-                padding: 10,
-              }}
+              className="ops-header-logo"
             />
 
             <div>
-              <div
-                style={{
-                  fontSize: 22,
-                  fontWeight: 900,
-                  letterSpacing: 1.2,
-                  opacity: 0.92,
-                  lineHeight: 1.1,
-                }}
-              >
-                CALIFORNIA CADET CORPS
+              <div className="ops-header-kicker">
+                California Cadet Corps
               </div>
 
               <div
                 style={{
                   display: "flex",
-                  gap: 12,
+                  gap: 10,
                   alignItems: "baseline",
                   flexWrap: "wrap",
-                  marginTop: 6,
+                  marginTop: 3,
                 }}
               >
-                <div
-                  style={{ fontSize: 40, fontWeight: 1000, lineHeight: 1.05 }}
-                >
-                  ADMIN CONSOLE
+                <div className="ops-header-title">
+                  Admin Console
                 </div>
                 <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
                   {state?.updatedAt
-                    ? `Last update: ${fmtTime(state.updatedAt)}`
+                    ? `Updated ${fmtTime(state.updatedAt)}`
                     : "Waiting for state…"}
                 </div>
               </div>
@@ -1472,20 +1656,14 @@ export default function AdminPage() {
 
             <Link
               href="/judge"
-              style={{
-                ...buttonStyle({ bg: "rgba(0,0,0,0.25)", disabled: false }),
-                textDecoration: "none",
-              }}
+              style={{ ...adminBtnSec, textDecoration: "none" }}
             >
               Judge
             </Link>
 
             <Link
               href="/public"
-              style={{
-                ...buttonStyle({ bg: "rgba(0,0,0,0.25)", disabled: false }),
-                textDecoration: "none",
-              }}
+              style={{ ...adminBtnSec, textDecoration: "none" }}
             >
               Public
             </Link>
@@ -1494,13 +1672,17 @@ export default function AdminPage() {
               onClick={() => setConfirmStartNewEvent(true)}
               disabled={!canAct}
               title="Clear Ops Chat and optionally reset queues"
-              style={buttonStyle({
-                bg: "rgba(45, 55, 72, 0.95)",
-                fg: "white",
-                disabled: !canAct,
-              })}
+              style={{ ...adminBtnSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
             >
               Reset Event…
+            </button>
+
+            <button
+              onClick={logout}
+              style={adminBtnSec}
+              title="Sign out of Admin Console"
+            >
+              Logout
             </button>
           </div>
         </header>
@@ -1571,13 +1753,13 @@ export default function AdminPage() {
         ) : null}
 
         {/* =======================
-            NEW: Ops Chat / Broadcast (Admin) — additive only
+            Ops Chat / Broadcast
            ======================= */}
         <div
           style={{
-            marginTop: 12,
+            marginTop: 16,
             borderRadius: 16,
-            padding: 12,
+            padding: 14,
             background: "rgba(0,0,0,0.22)",
             border: "1px solid rgba(255,255,255,0.10)",
           }}
@@ -1591,8 +1773,8 @@ export default function AdminPage() {
               alignItems: "center",
             }}
           >
-            <div style={{ fontWeight: 1000 }}>
-              🗨️ Ops Chat / Broadcast (Pad Channels)
+            <div style={{ fontWeight: 800, fontSize: 14 }}>
+              Ops Chat &amp; Broadcast
             </div>
             <span style={chipStyle("rgba(0,0,0,0.25)", "white")}>
               Channels: {commChannels.length}
@@ -1669,11 +1851,7 @@ export default function AdminPage() {
             <button
               disabled={!canAct || !bcText.trim()}
               onClick={sendBroadcast}
-              style={buttonStyle({
-                bg: COLOR_ORANGE,
-                fg: "#111",
-                disabled: !canAct || !bcText.trim(),
-              })}
+              style={{ ...adminBtnSec, opacity: !canAct || !bcText.trim() ? 0.5 : 1, cursor: !canAct || !bcText.trim() ? "not-allowed" : "pointer" }}
             >
               Broadcast
             </button>
@@ -1801,7 +1979,7 @@ export default function AdminPage() {
                                 alignItems: "baseline",
                               }}
                             >
-                              <div style={{ fontWeight: 950 }}>{c.name}</div>
+                              <div style={{ fontWeight: 800 }}>{c.name}</div>
                               <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
                                 {unread > 0 ? (
                                   <span
@@ -1874,7 +2052,7 @@ export default function AdminPage() {
                   flexWrap: "wrap",
                 }}
               >
-                <div style={{ fontWeight: 950 }}>
+                <div style={{ fontWeight: 800 }}>
                   {selectedChannel
                     ? `${selectedChannel.name} • ${selectedChannel.online ? "online" : "offline"}`
                     : "Select a pad channel"}
@@ -2001,21 +2179,11 @@ export default function AdminPage() {
                     !commDraft.trim() ||
                     commSelectedPadId == null
                   }
-                  style={buttonStyle({
-                    bg:
-                      !canAct ||
-                      commBusy ||
-                      !commDraft.trim() ||
-                      commSelectedPadId == null
-                        ? "rgba(0,0,0,0.25)"
-                        : "var(--cacc-gold)",
-                    fg: "#111",
-                    disabled:
-                      !canAct ||
-                      commBusy ||
-                      !commDraft.trim() ||
-                      commSelectedPadId == null,
-                  })}
+                  style={{
+                    ...adminBtnPri,
+                    opacity: !canAct || commBusy || !commDraft.trim() || commSelectedPadId == null ? 0.45 : 1,
+                    cursor: !canAct || commBusy || !commDraft.trim() || commSelectedPadId == null ? "not-allowed" : "pointer",
+                  }}
                 >
                   Send
                 </button>
@@ -2031,8 +2199,8 @@ export default function AdminPage() {
           style={{
             marginTop: 12,
             borderRadius: 16,
-            padding: 12,
-            background: "rgba(0,0,0,0.22)",
+            padding: 14,
+            background: "rgba(0,0,0,0.20)",
             border: "1px solid rgba(255,255,255,0.10)",
           }}
         >
@@ -2044,17 +2212,16 @@ export default function AdminPage() {
               alignItems: "center",
             }}
           >
-            <span style={chipStyle("rgba(255,255,255,0.16)", "white")}>
-              SCHEDULE
-            </span>
-            <div style={{ fontWeight: 900 }}>
-              NOW:{" "}
+            <span style={{ fontWeight: 800, fontSize: 13, opacity: 0.85 }}>Schedule</span>
+            <span style={{ opacity: 0.4, fontSize: 12 }}>—</span>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>
+              Now:{" "}
               {nowGlobal
                 ? `${nowGlobal.title} (${fmtTime(nowGlobal.startAt)}–${fmtTime(nowGlobal.endAt)})`
                 : "—"}
             </div>
-            <div style={{ opacity: 0.85 }}>
-              NEXT:{" "}
+            <div style={{ opacity: 0.75, fontSize: 13 }}>
+              Next:{" "}
               {nextGlobal
                 ? `${nextGlobal.title} (${fmtTime(nextGlobal.startAt)}–${fmtTime(nextGlobal.endAt)})`
                 : "—"}
@@ -2072,20 +2239,22 @@ export default function AdminPage() {
           style={{
             marginTop: 12,
             borderRadius: 16,
-            padding: 12,
-            background: "rgba(255,255,255,0.05)",
-            border: "1px solid rgba(255,255,255,0.10)",
+            padding: 14,
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.09)",
           }}
         >
           <div
             style={{
-              fontSize: 12,
-              fontWeight: 900,
-              opacity: 0.85,
-              letterSpacing: 1.1,
+              fontSize: 11,
+              fontWeight: 700,
+              opacity: 0.55,
+              letterSpacing: 1.4,
+              textTransform: "uppercase",
+              marginBottom: 10,
             }}
           >
-            AREA HEALTH
+            Area Status
           </div>
           <div
             style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}
@@ -2139,7 +2308,7 @@ export default function AdminPage() {
                 flexWrap: "wrap",
               }}
             >
-              <div style={{ fontWeight: 1000 }}>📢 GLOBAL MESSAGE</div>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>Global Message</div>
               <span style={chipStyle("rgba(0,0,0,0.22)", "white")}>
                 Broadcast
               </span>
@@ -2221,20 +2390,14 @@ export default function AdminPage() {
               <button
                 disabled={!canAct}
                 onClick={doSetMessage}
-                style={buttonStyle({
-                  bg: "rgba(0,0,0,0.25)",
-                  disabled: !canAct,
-                })}
+                style={{ ...adminBtnSec, width: "100%", opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
               >
                 Set
               </button>
               <button
                 disabled={!canAct}
                 onClick={doClearMessage}
-                style={buttonStyle({
-                  bg: "rgba(0,0,0,0.25)",
-                  disabled: !canAct,
-                })}
+                style={{ ...adminBtnSec, width: "100%", opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
               >
                 Clear
               </button>
@@ -2261,7 +2424,7 @@ export default function AdminPage() {
                 flexWrap: "wrap",
               }}
             >
-              <div style={{ fontWeight: 1000 }}>🟠 GLOBAL BREAK</div>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>Global Break</div>
               <span style={chipStyle("rgba(0,0,0,0.22)", "white")}>
                 Pauses all
               </span>
@@ -2270,7 +2433,7 @@ export default function AdminPage() {
             <div className="dashCardBody">
               {globalBreakActive ? (
                 <div
-                  style={{ fontWeight: 950, fontSize: 13, lineHeight: 1.35 }}
+                  style={{ fontWeight: 800, fontSize: 13, lineHeight: 1.35 }}
                 >
                   <div>
                     <b>ACTIVE:</b> {state?.globalBreakReason ?? "Break"}
@@ -2284,7 +2447,7 @@ export default function AdminPage() {
               ) : state?.globalBreakStartAt &&
                 state?.globalBreakStartAt > nowMs ? (
                 <div
-                  style={{ fontWeight: 950, fontSize: 13, lineHeight: 1.35 }}
+                  style={{ fontWeight: 800, fontSize: 13, lineHeight: 1.35 }}
                 >
                   <div>
                     <b>SCHEDULED:</b> {state?.globalBreakReason ?? "Break"}
@@ -2345,15 +2508,7 @@ export default function AdminPage() {
               <button
                 disabled={!canAct}
                 onClick={doStartGlobalBreakNow}
-                style={{
-                  ...buttonStyle({
-                    bg: COLOR_ORANGE,
-                    fg: "#111",
-                    disabled: !canAct,
-                  }),
-                  width: "100%",
-                  marginTop: 10,
-                }}
+                style={{ ...adminBtnPri, width: "100%", marginTop: 10, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
               >
                 Start Now
               </button>
@@ -2383,10 +2538,7 @@ export default function AdminPage() {
                 <button
                   disabled={!canAct || !gbStartLocal}
                   onClick={doScheduleGlobalBreak}
-                  style={buttonStyle({
-                    bg: "rgba(0,0,0,0.25)",
-                    disabled: !canAct || !gbStartLocal,
-                  })}
+                  style={{ ...adminBtnSec, width: "100%", opacity: !canAct || !gbStartLocal ? 0.55 : 1, cursor: !canAct || !gbStartLocal ? "not-allowed" : "pointer" }}
                 >
                   Schedule
                 </button>
@@ -2396,11 +2548,7 @@ export default function AdminPage() {
             <button
               disabled={!canAct}
               onClick={doEndGlobalBreak}
-              style={{
-                ...buttonStyle({ bg: "rgba(0,0,0,0.25)", disabled: !canAct }),
-                width: "100%",
-                marginTop: 10,
-              }}
+              style={{ ...adminBtnSec, width: "100%", marginTop: 10, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
             >
               End
             </button>
@@ -2426,7 +2574,7 @@ export default function AdminPage() {
                 flexWrap: "wrap",
               }}
             >
-              <div style={{ fontWeight: 1000 }}>🗓️ SCHEDULE</div>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>Schedule</div>
               <span style={chipStyle("rgba(0,0,0,0.22)", "white")}>
                 Manual entry
               </span>
@@ -2619,7 +2767,7 @@ export default function AdminPage() {
                               </span>
                               <div
                                 style={{
-                                  fontWeight: 950,
+                                  fontWeight: 800,
                                   overflow: "hidden",
                                   textOverflow: "ellipsis",
                                   whiteSpace: "nowrap",
@@ -2670,20 +2818,14 @@ export default function AdminPage() {
                                     e.title,
                                 })
                               }
-                              style={buttonStyle({
-                                bg: "rgba(0,0,0,0.25)",
-                                disabled: !canAct,
-                              })}
+                              style={{ ...adminBtnSmSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
                             >
                               Rename
                             </button>
                             <button
                               disabled={!canAct}
                               onClick={() => deleteEvent(e.id)}
-                              style={buttonStyle({
-                                bg: "rgba(0,0,0,0.25)",
-                                disabled: !canAct,
-                              })}
+                              style={{ ...adminBtnSmDng, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
                             >
                               Delete
                             </button>
@@ -2703,18 +2845,143 @@ export default function AdminPage() {
             <button
               disabled={!canAct}
               onClick={addScheduleEvent}
-              style={{
-                ...buttonStyle({
-                  bg: "var(--cacc-gold)",
-                  fg: "#111",
-                  disabled: !canAct,
-                }),
-                width: "100%",
-                marginTop: 10,
-              }}
+              style={{ ...adminBtnPri, marginTop: 10, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
             >
               Add Block
             </button>
+          </div>
+        </div>
+
+        {/* =======================
+            COMPETITION SCHEDULE IMPORT (from roster_chipper JSON)
+           ======================= */}
+        <div
+          style={{
+            marginTop: 14,
+            borderRadius: 16,
+            padding: 12,
+            background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.10)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 10,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ fontWeight: 800, fontSize: 14 }}>Competition Schedule</div>
+            <span style={chipStyle("rgba(0,0,0,0.22)", "white")}>
+              roster_chipper JSON
+            </span>
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            {/* Imported schedule status */}
+            {state?.scheduledSlots && state.scheduledSlots.length > 0 ? (
+              <div
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  background: "rgba(76,175,80,0.12)",
+                  border: "1px solid rgba(76,175,80,0.3)",
+                  marginBottom: 10,
+                  fontSize: 13,
+                }}
+              >
+                <div style={{ fontWeight: 800, color: "#a5d6a7" }}>
+                  {state.scheduledSlots.length} slots imported
+                  {state.scheduleEventName ? ` — ${state.scheduleEventName}` : ""}
+                </div>
+                {state.scheduleGeneratedBy && (
+                  <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, marginTop: 2 }}>
+                    Generated by: {state.scheduleGeneratedBy}
+                  </div>
+                )}
+                {state.scheduleImportedAt && (
+                  <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 2 }}>
+                    Imported: {new Date(state.scheduleImportedAt).toLocaleTimeString()}
+                  </div>
+                )}
+                <div style={{ marginTop: 8, fontSize: 12, color: "rgba(255,255,255,0.6)" }}>
+                  {state.scheduledSlots.filter((s: ScheduleSlot) => s.status === "COMPLETE").length} complete ·{" "}
+                  {state.scheduledSlots.filter((s: ScheduleSlot) => s.status === "ON_PAD").length} on pad ·{" "}
+                  {state.scheduledSlots.filter((s: ScheduleSlot) => s.status === "PLANNED").length} planned
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", marginBottom: 10 }}>
+                No schedule imported. Import a JSON file from roster_chipper to show anticipated start times.
+              </div>
+            )}
+
+            {/* File input (hidden) */}
+            <input
+              ref={schedImportRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null;
+                if (schedImportRef.current) schedImportRef.current.value = "";
+                handleSchedImportFile(f);
+              }}
+            />
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                disabled={!canAct || schedImportLoading}
+                onClick={() => { setSchedImportError(null); setSchedImportNote(null); schedImportRef.current?.click(); }}
+                style={{ ...adminBtnPri, opacity: !canAct || schedImportLoading ? 0.55 : 1, cursor: !canAct || schedImportLoading ? "not-allowed" : "pointer" }}
+              >
+                {schedImportLoading ? "Importing…" : "Import JSON"}
+              </button>
+
+              {state?.scheduledSlots && state.scheduledSlots.length > 0 && (
+                <button
+                  disabled={!canAct}
+                  onClick={doClearSchedImport}
+                  style={{ ...adminBtnDng, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
+                >
+                  Clear Schedule
+                </button>
+              )}
+            </div>
+
+            {schedImportError && (
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  background: "rgba(198,40,40,0.16)",
+                  border: "1px solid rgba(198,40,40,0.4)",
+                  fontSize: 12,
+                  color: "#f48fb1",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {schedImportError}
+              </div>
+            )}
+            {schedImportNote && (
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  background: "rgba(76,175,80,0.12)",
+                  border: "1px solid rgba(76,175,80,0.3)",
+                  fontSize: 12,
+                  color: "#a5d6a7",
+                }}
+              >
+                {schedImportNote}
+              </div>
+            )}
           </div>
         </div>
 
@@ -2739,7 +3006,7 @@ export default function AdminPage() {
               flexWrap: "wrap",
             }}
           >
-            <div style={{ fontWeight: 1000 }}>AREAS</div>
+            <div style={{ fontWeight: 800, fontSize: 14 }}>Competition Areas</div>
 
             {/* Header actions: side-by-side, smaller */}
             <div
@@ -2766,19 +3033,7 @@ export default function AdminPage() {
                 disabled={!canAct}
                 onClick={clickImport}
                 title={IMPORT_TOOLTIP}
-                style={{
-                  ...buttonStyle({ bg: "rgba(0,0,0,0.22)", disabled: !canAct }),
-                  display: "inline-flex",
-                  width: "auto",
-                  minWidth: "unset",
-                  height: 32,
-                  padding: "0 12px",
-                  borderRadius: 10,
-                  fontWeight: 850,
-                  fontSize: 13,
-                  letterSpacing: 0.2,
-                  whiteSpace: "nowrap",
-                }}
+                style={{ ...adminBtnSmSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
               >
                 Import Roster (CSV)
               </button>
@@ -2787,19 +3042,7 @@ export default function AdminPage() {
                 disabled={!canAct}
                 onClick={doReloadRoster}
                 title="Reload roster from server CSV baseline"
-                style={{
-                  ...buttonStyle({ bg: "rgba(0,0,0,0.22)", disabled: !canAct }),
-                  display: "inline-flex",
-                  width: "auto",
-                  minWidth: "unset",
-                  height: 32,
-                  padding: "0 12px",
-                  borderRadius: 10,
-                  fontWeight: 850,
-                  fontSize: 13,
-                  letterSpacing: 0.2,
-                  whiteSpace: "nowrap",
-                }}
+                style={{ ...adminBtnSmSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
               >
                 Reload Roster
               </button>
@@ -2808,23 +3051,7 @@ export default function AdminPage() {
                 disabled={!canAct}
                 onClick={() => setConfirmClearAll(true)}
                 title="Hard reset: clears NOW/ONDECK/STANDBY across all areas"
-                style={{
-                  ...buttonStyle({
-                    bg: "rgba(198,40,40,0.18)",
-                    fg: "#ffd2d2",
-                    disabled: !canAct,
-                  }),
-                  display: "inline-flex",
-                  width: "auto",
-                  minWidth: "unset",
-                  height: 32,
-                  padding: "0 12px",
-                  borderRadius: 10,
-                  fontWeight: 850,
-                  fontSize: 13,
-                  letterSpacing: 0.2,
-                  whiteSpace: "nowrap",
-                }}
+                style={{ ...adminBtnSmDng, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
               >
                 Clear All
               </button>
@@ -2904,11 +3131,7 @@ export default function AdminPage() {
             <button
               disabled={!canAct}
               onClick={addArea}
-              style={buttonStyle({
-                bg: "var(--cacc-gold)",
-                fg: "#111",
-                disabled: !canAct,
-              })}
+              style={{ ...adminBtnPri, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
             >
               Add Area
             </button>
@@ -2926,10 +3149,11 @@ export default function AdminPage() {
             {areas.length === 0 ? (
               <div style={{ opacity: 0.75 }}>No areas created.</div>
             ) : (
-              areas.map((a) => (
+              areas.map((a, idx) => (
                 <AreaRow
                   key={a.id}
                   pad={a}
+                  displayIndex={idx + 1}
                   canAct={canAct}
                   onSave={(name, label) => saveArea(a.id, name, label)}
                   onDelete={() => requestDelete(a.id)}
@@ -2947,7 +3171,7 @@ export default function AdminPage() {
         {confirmStartNow && (
           <div onClick={() => setConfirmStartNow(false)} style={modalBackdrop}>
             <div onClick={(e) => e.stopPropagation()} style={modalCard}>
-              <div style={{ fontWeight: 1000, fontSize: 18 }}>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>
                 Start Competition Now?
               </div>
               <div
@@ -2972,10 +3196,7 @@ export default function AdminPage() {
               >
                 <button
                   onClick={() => setConfirmStartNow(false)}
-                  style={buttonStyle({
-                    bg: "rgba(0,0,0,0.25)",
-                    disabled: false,
-                  })}
+                  style={adminBtnSec}
                 >
                   Cancel
                 </button>
@@ -2993,11 +3214,7 @@ export default function AdminPage() {
                     });
                   }}
                   disabled={!canAct}
-                  style={buttonStyle({
-                    bg: "rgba(46,125,50,0.85)",
-                    fg: "white",
-                    disabled: !canAct,
-                  })}
+                  style={{ ...adminBtnPri, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
                 >
                   Start Now
                 </button>
@@ -3012,7 +3229,7 @@ export default function AdminPage() {
         {confirmClearAll && (
           <div onClick={() => setConfirmClearAll(false)} style={modalBackdrop}>
             <div onClick={(e) => e.stopPropagation()} style={modalCard}>
-              <div style={{ fontWeight: 1000, fontSize: 18 }}>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>
                 Clear ALL Areas?
               </div>
               <div
@@ -3039,21 +3256,14 @@ export default function AdminPage() {
               >
                 <button
                   onClick={() => setConfirmClearAll(false)}
-                  style={buttonStyle({
-                    bg: "rgba(0,0,0,0.25)",
-                    disabled: false,
-                  })}
+                  style={adminBtnSec}
                 >
                   Cancel
                 </button>
                 <button
                   onClick={doClearAll}
                   disabled={!canAct}
-                  style={buttonStyle({
-                    bg: COLOR_RED,
-                    fg: "white",
-                    disabled: !canAct,
-                  })}
+                  style={{ ...adminBtnDng, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
                 >
                   Clear Everything
                 </button>
@@ -3074,7 +3284,7 @@ export default function AdminPage() {
             style={modalBackdrop}
           >
             <div onClick={(e) => e.stopPropagation()} style={modalCard}>
-              <div style={{ fontWeight: 1000, fontSize: 18 }}>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>
                 Reset Event?
               </div>
               <div
@@ -3230,21 +3440,14 @@ export default function AdminPage() {
                     setConfirmStartNewEvent(false);
                     setResetError(null);
                   }}
-                  style={buttonStyle({
-                    bg: "rgba(0,0,0,0.25)",
-                    disabled: false,
-                  })}
+                  style={adminBtnSec}
                 >
                   Cancel
                 </button>
                 <button
                   onClick={doStartNewEvent}
                   disabled={!canAct}
-                  style={buttonStyle({
-                    bg: "rgba(45, 55, 72, 0.95)",
-                    fg: "white",
-                    disabled: !canAct,
-                  })}
+                  style={{ ...adminBtnSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
                 >
                   Reset Event
                 </button>
@@ -3254,404 +3457,685 @@ export default function AdminPage() {
         )}
 
         {/* =======================
-            Queue Manager modal (your full layout)
+            Queue Manager modal
            ======================= */}
         {queueModalPadId != null && queuePad ? (
           <div
             onClick={closeQueueManager}
-            style={{
-              ...modalBackdrop,
-              background: "rgba(0,0,0,0.45)",
-              zIndex: 95,
-            }}
+            style={{ ...modalBackdrop, background: "rgba(0,0,0,0.55)", zIndex: 95 }}
           >
             <div
               onClick={(e) => e.stopPropagation()}
               style={{
-                width: "min(1040px, 100%)",
+                width: "min(860px, 100%)",
                 maxHeight: "88vh",
-                overflow: "auto",
+                display: "flex",
+                flexDirection: "column",
                 borderRadius: 18,
-                background: "rgba(24,34,60,0.98)",
-                border: "1px solid rgba(255,255,255,0.16)",
-                boxShadow: "0 18px 60px rgba(0,0,0,0.55)",
-                padding: 16,
+                background: "rgba(8, 12, 26, 0.99)",
+                border: "1px solid rgba(255,255,255,0.14)",
+                boxShadow: "0 24px 72px rgba(0,0,0,0.65)",
+                overflow: "hidden",
               }}
             >
-              {/* Top bar */}
+              {/* ── Sticky header ── */}
               <div
                 style={{
+                  padding: "18px 24px 14px",
+                  borderBottom: "1px solid rgba(255,255,255,0.09)",
+                  background: "rgba(0,0,0,0.40)",
+                  flexShrink: 0,
                   display: "flex",
                   justifyContent: "space-between",
-                  gap: 12,
-                  alignItems: "center",
-                  flexWrap: "wrap",
+                  alignItems: "flex-start",
+                  gap: 16,
                 }}
               >
                 <div>
-                  <div style={{ fontWeight: 1100, fontSize: 18 }}>
-                    Queue Manager — Area {queuePad.id}
+                  <div
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: 2,
+                      color: "rgba(255,255,255,0.38)",
+                      textTransform: "uppercase",
+                      marginBottom: 4,
+                    }}
+                  >
+                    Queue Manager
                   </div>
-                  <div style={{ fontSize: 13, opacity: 0.8 }}>
-                    NOW {queuePad.now ? 1 : 0} • ON {queuePad.onDeck ? 1 : 0} •
-                    STBY {queuePad.standby?.length ?? 0}
+                  <div
+                    style={{
+                      fontSize: 19,
+                      fontWeight: 800,
+                      color: "var(--text-primary, white)",
+                      lineHeight: 1.15,
+                    }}
+                  >
+                    {queuePad.name || `Pad ${queuePad.id}`}
+                  </div>
+                  {resolveAreaLabel(queuePad, state?.scheduledSlots) ? (
+                    <div
+                      style={{ marginTop: 3, fontSize: 13, color: "rgba(255,255,255,0.45)" }}
+                    >
+                      {resolveAreaLabel(queuePad, state?.scheduledSlots)}
+                    </div>
+                  ) : null}
+                  <div
+                    style={{
+                      marginTop: 6,
+                      display: "flex",
+                      gap: 16,
+                      fontSize: 11,
+                      color: "rgba(255,255,255,0.35)",
+                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                    }}
+                  >
+                    <span>NOW: {queuePad.now ? queuePad.now.name : "—"}</span>
+                    <span>ON DECK: {queuePad.onDeck ? queuePad.onDeck.name : "—"}</span>
+                    <span>STANDBY: {queuePad.standby?.length ?? 0}</span>
                   </div>
                 </div>
-
                 <button
                   onClick={closeQueueManager}
+                  aria-label="Close Queue Manager"
                   style={{
-                    ...buttonStyle({ bg: "rgba(0,0,0,0.25)", disabled: false }),
-                    display: "inline-flex",
-                    width: "auto",
-                    minWidth: "unset",
-                    height: 30,
-                    padding: "0 12px",
-                    borderRadius: 10,
-                    fontWeight: 900,
+                    background: "rgba(255,255,255,0.08)",
+                    border: "1px solid rgba(255,255,255,0.13)",
+                    borderRadius: 8,
+                    color: "rgba(255,255,255,0.85)",
+                    fontWeight: 800,
+                    fontSize: 14,
+                    width: 32,
+                    height: 32,
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    lineHeight: 1,
                   }}
                 >
-                  Close
+                  ✕
                 </button>
               </div>
 
-              {/* Tabs */}
+              {/* ── Section tabs ── */}
               <div
                 style={{
-                  marginTop: 12,
+                  padding: "0 24px",
+                  background: "rgba(0,0,0,0.20)",
+                  flexShrink: 0,
                   display: "flex",
-                  gap: 8,
-                  flexWrap: "wrap",
+                  gap: 4,
+                  borderBottom: "1px solid rgba(255,255,255,0.09)",
                 }}
               >
                 {(["NOW", "ONDECK", "STANDBY"] as QueueFocus[]).map((t) => {
                   const active = queueFocus === t;
+                  const label = t === "ONDECK" ? "ON DECK" : t;
                   return (
                     <button
                       key={t}
                       onClick={() => setQueueFocus(t)}
                       style={{
-                        ...buttonStyle({
-                          bg: active
-                            ? "rgba(255,215,64,0.90)"
-                            : "rgba(0,0,0,0.22)",
-                          fg: active ? "#111" : "white",
-                          disabled: false,
-                        }),
-                        display: "inline-flex",
-                        width: "auto",
-                        minWidth: "unset",
-                        height: 32,
-                        padding: "0 14px",
-                        borderRadius: 999,
-                        fontWeight: 950,
+                        padding: "10px 18px",
+                        background: "transparent",
+                        border: "none",
+                        borderBottom: active
+                          ? "2px solid var(--cacc-gold, #FFD740)"
+                          : "2px solid transparent",
+                        color: active
+                          ? "var(--cacc-gold, #FFD740)"
+                          : "rgba(255,255,255,0.42)",
+                        fontWeight: active ? 800 : 600,
+                        fontSize: 12,
+                        letterSpacing: 1.2,
+                        cursor: "pointer",
+                        textTransform: "uppercase",
+                        marginBottom: -1,
                       }}
                     >
-                      {t === "ONDECK" ? "ON DECK" : t}
+                      {label}
                     </button>
                   );
                 })}
               </div>
 
-              {/* NOW (Primary) */}
-              <div style={{ marginTop: 12 }}>
-                <PadPrimarySection
-                  variant="control"
-                  statusAccent="rgba(255,255,255,0.16)"
-                  statusBadge={
-                    <span style={chipStyle("rgba(255,255,255,0.16)", "white")}>
-                      NOW
-                    </span>
-                  }
-                  competitorContent={
-                    <>
-                      {queuePad.now ? (
-                        queuePad.now.name
-                      ) : (
-                        <span style={{ opacity: 0.6 }}>— empty —</span>
-                      )}
-                      {queuePad.now ? (
-                        <div
-                          style={{
-                            marginTop: 3,
-                            opacity: 0.8,
-                            fontFamily:
-                              "ui-monospace, SFMono-Regular, Menlo, monospace",
-                            fontSize: 11,
-                          }}
-                        >
-                          {queuePad.now.id}
-                        </div>
-                      ) : null}
-                    </>
-                  }
-                  actions={
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <button
-                        disabled={!canAct || !queuePad.now}
-                        onClick={() => qmDemote(queuePad.id, "NOW", "TOP")}
-                        style={buttonStyle({
-                          bg: "rgba(0,0,0,0.22)",
-                          disabled: !canAct || !queuePad.now,
-                        })}
-                      >
-                        Demote → Top
-                      </button>
-                      <button
-                        disabled={!canAct || !queuePad.now}
-                        onClick={() => qmDemote(queuePad.id, "NOW", "END")}
-                        style={buttonStyle({
-                          bg: "rgba(0,0,0,0.22)",
-                          disabled: !canAct || !queuePad.now,
-                        })}
-                      >
-                        Demote → End
-                      </button>
-                    </div>
-                  }
-                />
-              </div>
-
-              {/* ON DECK */}
-              <PadOnDeckSection
-                variant="control"
-                label="ON DECK"
-                labelRight="NEXT"
-                actions={
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button
-                      disabled={!canAct}
-                      onClick={() => qmSwap(queuePad.id)}
-                      style={buttonStyle({
-                        bg: "rgba(0,0,0,0.22)",
-                        disabled: !canAct,
-                      })}
-                    >
-                      Swap NOW/ON
-                    </button>
-                    <button
-                      disabled={!canAct || !queuePad.onDeck}
-                      onClick={() => qmDemote(queuePad.id, "ONDECK", "TOP")}
-                      style={buttonStyle({
-                        bg: "rgba(0,0,0,0.22)",
-                        disabled: !canAct || !queuePad.onDeck,
-                      })}
-                    >
-                      Demote → Top
-                    </button>
-                    <button
-                      disabled={!canAct || !queuePad.onDeck}
-                      onClick={() => qmDemote(queuePad.id, "ONDECK", "END")}
-                      style={buttonStyle({
-                        bg: "rgba(0,0,0,0.22)",
-                        disabled: !canAct || !queuePad.onDeck,
-                      })}
-                    >
-                      Demote → End
-                    </button>
-                  </div>
-                }
-              >
-                <>
-                  {queuePad.onDeck ? (
-                    queuePad.onDeck.name
-                  ) : (
-                    <span style={{ opacity: 0.6 }}>— empty —</span>
-                  )}
-                  {queuePad.onDeck ? (
-                    <div
-                      style={{
-                        marginTop: 3,
-                        opacity: 0.8,
-                        fontFamily:
-                          "ui-monospace, SFMono-Regular, Menlo, monospace",
-                        fontSize: 11,
-                      }}
-                    >
-                      {queuePad.onDeck.id}
-                    </div>
-                  ) : null}
-                </>
-              </PadOnDeckSection>
-
-              {/* Add participant (Standby) */}
+              {/* ── Scrollable body ── */}
               <div
                 style={{
-                  marginTop: 12,
-                  borderRadius: 10,
-                  padding: 12,
-                  background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.10)",
+                  overflowY: "auto",
+                  flex: 1,
+                  padding: "20px 24px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 14,
                 }}
               >
-                <div style={{ fontWeight: 950, fontSize: 13 }}>
-                  Add Participant (Standby)
-                </div>
+
+                {/* ── NOW ── */}
                 <div
                   style={{
-                    marginTop: 8,
-                    display: "grid",
-                    gridTemplateColumns: "1fr 220px 140px",
-                    gap: 10,
+                    borderRadius: 12,
+                    border: "1px solid rgba(144,202,249,0.22)",
+                    background: "rgba(144,202,249,0.05)",
+                    overflow: "hidden",
                   }}
                 >
-                  <input
-                    value={qmAddName}
-                    onChange={(e) => setQmAddName(e.target.value)}
-                    placeholder="Team Name (required)"
-                    style={flatInput}
-                  />
-                  <input
-                    value={qmAddId}
-                    onChange={(e) => setQmAddId(e.target.value)}
-                    placeholder="Team ID (required)"
-                    style={flatInput}
-                  />
-                  <button
-                    disabled={!canAct}
-                    onClick={() => qmAddToStandby(queuePad.id)}
-                    style={buttonStyle({
-                      bg: "rgba(255,215,64,0.92)",
-                      fg: "#111",
-                      disabled: !canAct,
-                    })}
-                  >
-                    Add
-                  </button>
-                </div>
-              </div>
-
-              {/* Standby list */}
-              <PadStandbySection
-                variant="control"
-                count={queuePad.standby?.length ?? 0}
-              >
-                {(queuePad.standby ?? []).length === 0 ? (
-                  <div style={{ opacity: 0.75 }}>No standby participants.</div>
-                ) : (
                   <div
-                    style={{ display: "flex", flexDirection: "column", gap: 8 }}
+                    style={{
+                      padding: "8px 16px",
+                      borderBottom: "1px solid rgba(144,202,249,0.14)",
+                      background: "rgba(0,0,0,0.22)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
                   >
-                    {(queuePad.standby ?? []).map((t: Team, idx: number) => {
-                      const isEditing = qmEditOriginalId === t.id;
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: "50%",
+                        background: "rgba(144,202,249,0.85)",
+                        flexShrink: 0,
+                        display: "inline-block",
+                      }}
+                    />
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 800,
+                        letterSpacing: 1.8,
+                        color: "rgba(144,202,249,0.85)",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      Now
+                    </span>
+                  </div>
+                  <div style={{ padding: "14px 16px" }}>
+                    {queuePad.now ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          gap: 12,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontSize: 17,
+                              fontWeight: 800,
+                              color: "var(--text-primary, white)",
+                              lineHeight: 1.2,
+                            }}
+                          >
+                            {queuePad.now.name}
+                          </div>
+                          {(queuePad.now.category || queuePad.now.division) ? (
+                            <div
+                              style={{
+                                marginTop: 3,
+                                fontSize: 12,
+                                color: "rgba(255,255,255,0.42)",
+                              }}
+                            >
+                              {[queuePad.now.category, queuePad.now.division]
+                                .filter(Boolean)
+                                .join(" · ")}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 7,
+                            flexWrap: "wrap",
+                            alignItems: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <button
+                            disabled={!canAct}
+                            onClick={() => qmDemote(queuePad.id, "NOW", "TOP")}
+                            style={{ ...qmBtnSec, opacity: !canAct ? 0.45 : 1 }}
+                          >
+                            Demote → Top
+                          </button>
+                          <button
+                            disabled={!canAct}
+                            onClick={() => qmDemote(queuePad.id, "NOW", "END")}
+                            style={{ ...qmBtnSec, opacity: !canAct ? 0.45 : 1 }}
+                          >
+                            Demote → End
+                          </button>
+                          <button
+                            onClick={() =>
+                              openInspect(queuePad.now!, {
+                                padName: queuePad.name,
+                                queueStatus: "NOW",
+                              })
+                            }
+                            style={qmBtnSec}
+                          >
+                            Inspect
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          fontSize: 13,
+                          color: "rgba(255,255,255,0.35)",
+                          fontStyle: "italic",
+                        }}
+                      >
+                        No team active on this pad.
+                      </div>
+                    )}
+                  </div>
+                </div>
 
+                {/* ── ON DECK ── */}
+                <div
+                  style={{
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,215,64,0.20)",
+                    background: "rgba(255,215,64,0.04)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "8px 16px",
+                      borderBottom: "1px solid rgba(255,215,64,0.13)",
+                      background: "rgba(0,0,0,0.22)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: "50%",
+                        background: "var(--cacc-gold, #FFD740)",
+                        flexShrink: 0,
+                        display: "inline-block",
+                      }}
+                    />
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 800,
+                        letterSpacing: 1.8,
+                        color: "var(--cacc-gold, #FFD740)",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      On Deck
+                    </span>
+                  </div>
+                  <div style={{ padding: "14px 16px" }}>
+                    {queuePad.onDeck ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          gap: 12,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontSize: 17,
+                              fontWeight: 800,
+                              color: "var(--text-primary, white)",
+                              lineHeight: 1.2,
+                            }}
+                          >
+                            {queuePad.onDeck.name}
+                          </div>
+                          {(queuePad.onDeck.category || queuePad.onDeck.division) ? (
+                            <div
+                              style={{
+                                marginTop: 3,
+                                fontSize: 12,
+                                color: "rgba(255,255,255,0.42)",
+                              }}
+                            >
+                              {[queuePad.onDeck.category, queuePad.onDeck.division]
+                                .filter(Boolean)
+                                .join(" · ")}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 7,
+                            flexWrap: "wrap",
+                            alignItems: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <button
+                            disabled={!canAct}
+                            onClick={() => qmSwap(queuePad.id)}
+                            style={{ ...qmBtnSec, opacity: !canAct ? 0.45 : 1 }}
+                          >
+                            Swap NOW/ON
+                          </button>
+                          <button
+                            disabled={!canAct}
+                            onClick={() =>
+                              qmDemote(queuePad.id, "ONDECK", "TOP")
+                            }
+                            style={{ ...qmBtnSec, opacity: !canAct ? 0.45 : 1 }}
+                          >
+                            Demote → Top
+                          </button>
+                          <button
+                            disabled={!canAct}
+                            onClick={() =>
+                              qmDemote(queuePad.id, "ONDECK", "END")
+                            }
+                            style={{ ...qmBtnSec, opacity: !canAct ? 0.45 : 1 }}
+                          >
+                            Demote → End
+                          </button>
+                          <button
+                            onClick={() =>
+                              openInspect(queuePad.onDeck!, {
+                                padName: queuePad.name,
+                                queueStatus: "ON DECK",
+                              })
+                            }
+                            style={qmBtnSec}
+                          >
+                            Inspect
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          fontSize: 13,
+                          color: "rgba(255,255,255,0.35)",
+                          fontStyle: "italic",
+                        }}
+                      >
+                        No team on deck.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* ── Add to Standby ── */}
+                <div
+                  style={{
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,255,255,0.10)",
+                    background: "rgba(255,255,255,0.03)",
+                    padding: "14px 16px",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: 2,
+                      color: "rgba(255,255,255,0.38)",
+                      textTransform: "uppercase",
+                      marginBottom: 10,
+                    }}
+                  >
+                    Add to Standby
+                  </div>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <input
+                      value={qmAddName}
+                      onChange={(e) => setQmAddName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && qmAddName.trim())
+                          qmAddToStandby(queuePad.id);
+                      }}
+                      placeholder="Team name (required)"
+                      style={{ ...flatInput, flex: 1 }}
+                    />
+                    <button
+                      disabled={!canAct || !qmAddName.trim()}
+                      onClick={() => qmAddToStandby(queuePad.id)}
+                      style={{
+                        ...qmBtnPri,
+                        height: 36,
+                        padding: "0 20px",
+                        opacity: !canAct || !qmAddName.trim() ? 0.45 : 1,
+                      }}
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+
+                {/* ── Standby list ── */}
+                <div
+                  style={{
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,255,255,0.10)",
+                    background: "rgba(255,255,255,0.02)",
+                    overflow: "hidden",
+                  }}
+                >
+                  {/* standby header */}
+                  <div
+                    style={{
+                      padding: "8px 16px",
+                      borderBottom: "1px solid rgba(255,255,255,0.08)",
+                      background: "rgba(0,0,0,0.22)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: "50%",
+                        background: "rgba(255,255,255,0.40)",
+                        flexShrink: 0,
+                        display: "inline-block",
+                      }}
+                    />
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 800,
+                        letterSpacing: 1.8,
+                        color: "rgba(255,255,255,0.50)",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      Standby
+                    </span>
+                    <span
+                      style={{
+                        marginLeft: "auto",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        color: "rgba(255,255,255,0.30)",
+                        fontFamily:
+                          "ui-monospace, SFMono-Regular, Menlo, monospace",
+                      }}
+                    >
+                      {queuePad.standby?.length ?? 0} in queue
+                    </span>
+                  </div>
+
+                  {/* standby rows */}
+                  {(queuePad.standby ?? []).length === 0 ? (
+                    <div
+                      style={{
+                        padding: "14px 16px",
+                        fontSize: 13,
+                        color: "rgba(255,255,255,0.32)",
+                        fontStyle: "italic",
+                      }}
+                    >
+                      No teams in standby.
+                    </div>
+                  ) : (
+                    (queuePad.standby ?? []).map((t: Team, idx: number) => {
+                      const isEditing = qmEditOriginalId === t.id;
+                      const isFirst = idx === 0;
+                      const isLast =
+                        idx === (queuePad.standby?.length ?? 1) - 1;
                       return (
                         <div
                           key={t.id}
                           style={{
-                            display: "grid",
-                            gridTemplateColumns: "60px 1fr 220px 260px 260px",
-                            gap: 10,
+                            display: "flex",
                             alignItems: "center",
-                            padding: "10px 12px",
-                            borderRadius: 14,
-                            background: "rgba(0,0,0,0.14)",
-                            border: "1px solid rgba(255,255,255,0.10)",
+                            gap: 12,
+                            padding: "10px 16px",
+                            borderBottom: isLast
+                              ? "none"
+                              : "1px solid rgba(255,255,255,0.06)",
+                            background: isEditing
+                              ? "rgba(255,215,64,0.05)"
+                              : "transparent",
                           }}
                         >
-                          <div style={{ fontWeight: 900, opacity: 0.9 }}>
+                          {/* Position number */}
+                          <div
+                            style={{
+                              width: 28,
+                              flexShrink: 0,
+                              fontFamily:
+                                "ui-monospace, SFMono-Regular, Menlo, monospace",
+                              fontSize: 12,
+                              fontWeight: 700,
+                              color: "rgba(255,255,255,0.32)",
+                              textAlign: "right",
+                            }}
+                          >
                             #{idx + 1}
                           </div>
 
-                          {isEditing ? (
-                            <input
-                              value={qmEditName}
-                              onChange={(e) => setQmEditName(e.target.value)}
-                              style={flatInput}
-                            />
-                          ) : (
-                            <div style={{ fontWeight: 900 }}>{t.name}</div>
-                          )}
-
-                          {isEditing ? (
-                            <input
-                              value={qmEditId}
-                              onChange={(e) => setQmEditId(e.target.value)}
-                              style={flatInput}
-                            />
-                          ) : (
-                            <div
-                              style={{
-                                opacity: 0.85,
-                                fontFamily:
-                                  "ui-monospace, SFMono-Regular, Menlo, monospace",
-                              }}
-                            >
-                              {t.id}
-                            </div>
-                          )}
-
-                          <div
-                            style={{
-                              display: "flex",
-                              gap: 8,
-                              flexWrap: "wrap",
-                            }}
-                          >
-                            <button
-                              disabled={!canAct || idx === 0}
-                              onClick={() =>
-                                qmMoveStandby(queuePad.id, idx, idx - 1)
-                              }
-                              style={buttonStyle({
-                                bg: "rgba(0,0,0,0.22)",
-                                disabled: !canAct || idx === 0,
-                              })}
-                              title="Move up"
-                            >
-                              ▲
-                            </button>
-                            <button
-                              disabled={
-                                !canAct ||
-                                idx === (queuePad.standby?.length ?? 1) - 1
-                              }
-                              onClick={() =>
-                                qmMoveStandby(queuePad.id, idx, idx + 1)
-                              }
-                              style={buttonStyle({
-                                bg: "rgba(0,0,0,0.22)",
-                                disabled:
-                                  !canAct ||
-                                  idx === (queuePad.standby?.length ?? 1) - 1,
-                              })}
-                              title="Move down"
-                            >
-                              ▼
-                            </button>
-
-                            <button
-                              disabled={!canAct}
-                              onClick={() =>
-                                qmSetSlot(queuePad.id, t.id, "NOW")
-                              }
-                              style={buttonStyle({
-                                bg: "rgba(0,0,0,0.22)",
-                                disabled: !canAct,
-                              })}
-                            >
-                              Set NOW
-                            </button>
-                            <button
-                              disabled={!canAct}
-                              onClick={() =>
-                                qmSetSlot(queuePad.id, t.id, "ONDECK")
-                              }
-                              style={buttonStyle({
-                                bg: "rgba(0,0,0,0.22)",
-                                disabled: !canAct,
-                              })}
-                            >
-                              Set ON
-                            </button>
+                          {/* Team name + metadata */}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            {isEditing ? (
+                              <input
+                                value={qmEditName}
+                                onChange={(e) => setQmEditName(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter")
+                                    saveEditTeam(queuePad.id);
+                                  if (e.key === "Escape") cancelEdit();
+                                }}
+                                style={{
+                                  ...flatInput,
+                                  fontSize: 14,
+                                  fontWeight: 700,
+                                }}
+                                autoFocus
+                              />
+                            ) : (
+                              <>
+                                <div
+                                  style={{
+                                    fontSize: 14,
+                                    fontWeight: 700,
+                                    color: "var(--text-primary, white)",
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                  }}
+                                >
+                                  {t.name}
+                                </div>
+                                {(t.category || t.division) ? (
+                                  <div
+                                    style={{
+                                      marginTop: 1,
+                                      fontSize: 11,
+                                      color: "rgba(255,255,255,0.38)",
+                                    }}
+                                  >
+                                    {[t.category, t.division]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                                  </div>
+                                ) : null}
+                              </>
+                            )}
                           </div>
 
+                          {/* Reorder arrows */}
+                          {!isEditing ? (
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: 4,
+                                flexShrink: 0,
+                              }}
+                            >
+                              <button
+                                disabled={!canAct || isFirst}
+                                onClick={() =>
+                                  qmMoveStandby(queuePad.id, idx, idx - 1)
+                                }
+                                title="Move up"
+                                style={{
+                                  ...qmBtnIcon,
+                                  opacity:
+                                    !canAct || isFirst ? 0.22 : 1,
+                                  cursor:
+                                    !canAct || isFirst
+                                      ? "not-allowed"
+                                      : "pointer",
+                                }}
+                              >
+                                ▲
+                              </button>
+                              <button
+                                disabled={!canAct || isLast}
+                                onClick={() =>
+                                  qmMoveStandby(queuePad.id, idx, idx + 1)
+                                }
+                                title="Move down"
+                                style={{
+                                  ...qmBtnIcon,
+                                  opacity:
+                                    !canAct || isLast ? 0.22 : 1,
+                                  cursor:
+                                    !canAct || isLast
+                                      ? "not-allowed"
+                                      : "pointer",
+                                }}
+                              >
+                                ▼
+                              </button>
+                            </div>
+                          ) : null}
+
+                          {/* Action buttons */}
                           <div
                             style={{
                               display: "flex",
-                              gap: 8,
-                              justifyContent: "flex-end",
+                              gap: 6,
+                              flexShrink: 0,
                               flexWrap: "wrap",
+                              justifyContent: "flex-end",
                             }}
                           >
                             {isEditing ? (
@@ -3659,20 +4143,16 @@ export default function AdminPage() {
                                 <button
                                   disabled={!canAct}
                                   onClick={() => saveEditTeam(queuePad.id)}
-                                  style={buttonStyle({
-                                    bg: "rgba(255,215,64,0.92)",
-                                    fg: "#111",
-                                    disabled: !canAct,
-                                  })}
+                                  style={{
+                                    ...qmBtnPri,
+                                    opacity: !canAct ? 0.45 : 1,
+                                  }}
                                 >
                                   Save
                                 </button>
                                 <button
                                   onClick={cancelEdit}
-                                  style={buttonStyle({
-                                    bg: "rgba(0,0,0,0.22)",
-                                    disabled: false,
-                                  })}
+                                  style={qmBtnSec}
                                 >
                                   Cancel
                                 </button>
@@ -3681,11 +4161,46 @@ export default function AdminPage() {
                               <>
                                 <button
                                   disabled={!canAct}
+                                  onClick={() =>
+                                    qmSetSlot(queuePad.id, t.id, "NOW")
+                                  }
+                                  style={{
+                                    ...qmBtnPri,
+                                    opacity: !canAct ? 0.45 : 1,
+                                  }}
+                                >
+                                  Set NOW
+                                </button>
+                                <button
+                                  disabled={!canAct}
+                                  onClick={() =>
+                                    qmSetSlot(queuePad.id, t.id, "ONDECK")
+                                  }
+                                  style={{
+                                    ...qmBtnSec,
+                                    opacity: !canAct ? 0.45 : 1,
+                                  }}
+                                >
+                                  Set ON
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    openInspect(t, {
+                                      padName: queuePad.name,
+                                      queueStatus: "STANDBY",
+                                    })
+                                  }
+                                  style={qmBtnSec}
+                                >
+                                  Inspect
+                                </button>
+                                <button
+                                  disabled={!canAct}
                                   onClick={() => startEdit(t.id, t.name)}
-                                  style={buttonStyle({
-                                    bg: "rgba(0,0,0,0.22)",
-                                    disabled: !canAct,
-                                  })}
+                                  style={{
+                                    ...qmBtnSec,
+                                    opacity: !canAct ? 0.45 : 1,
+                                  }}
                                 >
                                   Edit
                                 </button>
@@ -3694,10 +4209,10 @@ export default function AdminPage() {
                                   onClick={() =>
                                     qmRemoveStandby(queuePad.id, t.id)
                                   }
-                                  style={buttonStyle({
-                                    bg: "rgba(0,0,0,0.22)",
-                                    disabled: !canAct,
-                                  })}
+                                  style={{
+                                    ...qmBtnDng,
+                                    opacity: !canAct ? 0.45 : 1,
+                                  }}
                                 >
                                   Remove
                                 </button>
@@ -3706,10 +4221,11 @@ export default function AdminPage() {
                           </div>
                         </div>
                       );
-                    })}
-                  </div>
-                )}
-              </PadStandbySection>
+                    })
+                  )}
+                </div>
+
+              </div>
             </div>
           </div>
         ) : null}
@@ -3723,7 +4239,7 @@ export default function AdminPage() {
               onClick={(e) => e.stopPropagation()}
               style={{ ...modalCard, width: "min(620px, 100%)" }}
             >
-              <div style={{ fontWeight: 1000, fontSize: 18 }}>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>
                 Add Participant — Area {addModalPadId}
               </div>
               <div
@@ -3818,21 +4334,14 @@ export default function AdminPage() {
               >
                 <button
                   onClick={closeAddModal}
-                  style={buttonStyle({
-                    bg: "rgba(0,0,0,0.25)",
-                    disabled: false,
-                  })}
+                  style={adminBtnSec}
                 >
                   Cancel
                 </button>
                 <button
                   onClick={confirmAddParticipant}
                   disabled={!canAct}
-                  style={buttonStyle({
-                    bg: "var(--cacc-gold)",
-                    fg: "#111",
-                    disabled: !canAct,
-                  })}
+                  style={{ ...adminBtnSec, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
                 >
                   Add Participant
                 </button>
@@ -3850,7 +4359,7 @@ export default function AdminPage() {
             style={{ ...modalBackdrop, zIndex: 80 }}
           >
             <div onClick={(e) => e.stopPropagation()} style={modalCard}>
-              <div style={{ fontWeight: 1000, fontSize: 18 }}>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>
                 Delete Area {confirmDeletePadId}?
               </div>
 
@@ -3876,10 +4385,7 @@ export default function AdminPage() {
               >
                 <button
                   onClick={() => setConfirmDeletePadId(null)}
-                  style={buttonStyle({
-                    bg: "rgba(0,0,0,0.25)",
-                    disabled: false,
-                  })}
+                  style={adminBtnSec}
                 >
                   Cancel
                 </button>
@@ -3887,11 +4393,7 @@ export default function AdminPage() {
                 <button
                   onClick={confirmDelete}
                   disabled={!canAct}
-                  style={buttonStyle({
-                    bg: COLOR_RED,
-                    fg: "white",
-                    disabled: !canAct,
-                  })}
+                  style={{ ...adminBtnDng, opacity: !canAct ? 0.55 : 1, cursor: !canAct ? "not-allowed" : "pointer" }}
                 >
                   Yes, Delete
                 </button>
@@ -3899,6 +4401,16 @@ export default function AdminPage() {
             </div>
           </div>
         )}
+
+        {/* Team Inspection Panel */}
+        {inspectDetail ? (
+          <TeamInspectionPanel
+            detail={inspectDetail}
+            context={inspectCtx}
+            isAdmin={true}
+            onClose={closeInspect}
+          />
+        ) : null}
       </main>
     </>
   );
@@ -3906,6 +4418,7 @@ export default function AdminPage() {
 
 function AreaRow({
   pad,
+  displayIndex,
   canAct,
   onSave,
   onDelete,
@@ -3913,6 +4426,7 @@ function AreaRow({
   onOpenQueue,
 }: {
   pad: Pad;
+  displayIndex: number;
   canAct: boolean;
   onSave: (name: string, label: string) => void;
   onDelete: () => void;
@@ -3950,23 +4464,16 @@ function AreaRow({
   };
 
   const smallBtn = (opts: {
-    bg: string;
-    fg?: string;
+    variant?: "pri" | "sec" | "dng";
     disabled?: boolean;
-  }): React.CSSProperties => ({
-    ...buttonStyle({ bg: opts.bg, fg: opts.fg, disabled: !!opts.disabled }),
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: "auto",
-    minWidth: "unset",
-    height: 30,
-    padding: "0 10px",
-    borderRadius: 10,
-    fontWeight: 850,
-    letterSpacing: 0.2,
-    whiteSpace: "nowrap",
-  });
+    // legacy params kept for call-site compat, ignored for styling
+    bg?: string; fg?: string;
+  }): React.CSSProperties => {
+    const base = opts.variant === "pri" ? adminBtnSmPri
+      : opts.variant === "dng" ? adminBtnSmDng
+      : adminBtnSmSec;
+    return { ...base, opacity: opts.disabled ? 0.55 : 1, cursor: opts.disabled ? "not-allowed" : "pointer" };
+  };
 
   // Non-button status badges (look like labels, not clickable)
   const badge: React.CSSProperties = {
@@ -3999,18 +4506,18 @@ function AreaRow({
         border: "1px solid rgba(255,255,255,0.10)",
       }}
     >
-      <div style={{ fontWeight: 950 }}>#{pad.id}</div>
+      <div style={{ fontWeight: 800 }}>#{displayIndex}</div>
 
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="Area name"
+        placeholder="Pad name (e.g. Pad 1)"
         style={inputStyle}
       />
       <input
         value={label}
         onChange={(e) => setLabel(e.target.value)}
-        placeholder="Area label"
+        placeholder="Category / Division"
         style={inputStyle}
       />
 
@@ -4018,7 +4525,7 @@ function AreaRow({
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button
           onClick={() => onOpenQueue(smartFocus)}
-          style={smallBtn({ bg: "rgba(33,150,243,0.28)" })}
+          style={smallBtn({ variant: "sec" })}
           title="Open Queue Manager"
         >
           Manage Queue
@@ -4034,11 +4541,7 @@ function AreaRow({
         <button
           disabled={!canAct}
           onClick={() => onSave(name, label)}
-          style={smallBtn({
-            bg: "rgba(255,215,64,0.90)",
-            fg: "#111",
-            disabled: !canAct,
-          })}
+          style={smallBtn({ variant: "sec", disabled: !canAct })}
         >
           Save
         </button>
@@ -4046,7 +4549,7 @@ function AreaRow({
         <button
           disabled={!canAct}
           onClick={onAddParticipant}
-          style={smallBtn({ bg: "rgba(0,0,0,0.25)", disabled: !canAct })}
+          style={smallBtn({ variant: "sec", disabled: !canAct })}
           title="Quick add participant (legacy)"
         >
           Add Participant
@@ -4055,7 +4558,7 @@ function AreaRow({
         <button
           disabled={!canAct}
           onClick={onDelete}
-          style={smallBtn({ bg: "rgba(0,0,0,0.25)", disabled: !canAct })}
+          style={smallBtn({ variant: "dng", disabled: !canAct })}
         >
           Delete
         </button>

@@ -13,6 +13,65 @@ export type Team = {
 
 export type PadStatus = "IDLE" | "REPORTING" | "ON_PAD" | "RUNNING" | "HOLD" | "BREAK";
 
+export type SlotStatus =
+  | "PLANNED"
+  | "READY"
+  | "ON_DECK"
+  | "ON_PAD"
+  | "COMPLETE"
+  | "SCRATCHED"
+  | "HELD"
+  | "SKIPPED";
+
+export type ScheduleSlot = {
+  slotId: string;
+  padId: number;
+  slotOrder: number;
+  teamId: string;
+  teamName: string;
+  brigade?: string;
+  category?: string;
+  division?: string;
+  anticipatedStart?: string; // "HH:MM" local time estimate
+  actualStartMs?: number;    // set by judge:arrived
+  actualEndMs?: number;      // set by judge:complete
+  status: SlotStatus;
+};
+
+// ---------------------------------------------------------------------------
+// Full team roster data — populated from schedule import, used by inspection UI
+// ---------------------------------------------------------------------------
+
+export type TeamMember = {
+  memberId: string;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  rank: string;
+  grade: string;
+  gender: string;
+  role: string | null;
+  notes: string | null;
+  status: string;
+};
+
+export type TeamDetail = {
+  teamId: string;
+  teamDisplayName: string;
+  brigade?: string;
+  brigadeNumber?: number;
+  schoolName?: string;
+  unitName?: string;
+  teamNumber?: number;
+  category?: string;
+  division?: string;
+  members: TeamMember[];
+  notes?: string | null;
+  warnings?: string[];
+  constraints?: string[];
+  sourceRowIds?: string[];
+};
+
 export type ScheduleType = "COMPETE" | "BREAK" | "LUNCH" | "CEREMONY" | "OTHER";
 export type ScheduleScope = "GLOBAL" | "PAD";
 
@@ -117,6 +176,14 @@ export type BoardState = {
   schedule?: ScheduleEvent[];
   scheduleUpdatedAt?: number;
 
+  // ===== Imported competition schedule (from roster_chipper) =====
+  scheduledSlots?: ScheduleSlot[];
+  scheduleImportedAt?: number;
+  scheduleEventName?: string;
+  scheduleGeneratedBy?: string;
+  /** teamId → full detail (roster, school, brigade, etc.) populated at import time */
+  teamDetails?: Record<string, TeamDetail>;
+
   // ===== Soft ETA model =====
   cycleStatsByPad?: Record<number, CycleStats>;
   cycleStatsByKey?: Record<string, CycleStats>;
@@ -143,8 +210,8 @@ export function createPad(params: {
 
   return {
     id,
-    name: name ?? `Area ${id}`,
-    label: label ?? `Area ${id}`,
+    name: name ?? `Pad ${id}`,
+    label: label ?? "",
 
     now: demoNow,
     onDeck: demoOnDeck,
@@ -211,6 +278,100 @@ export function createInitialState(): BoardState {
     eventPaused: false,
     eventPausedAt: null,
     eventPausedAccumMs: 0,
+  };
+}
+
+/**
+ * Derives the current category/division label for a pad.
+ *
+ * Priority:
+ *   A. NOW team's category + division
+ *   B. ON DECK team's category + division
+ *   C. Next non-terminal scheduled slot for the pad
+ *   D. Static pad.label (admin-saved fallback)
+ *   E. "" (blank)
+ */
+export function resolveAreaLabel(pad: Pad, scheduledSlots?: ScheduleSlot[]): string {
+  function teamCatDiv(t: Team): string {
+    const parts = [t.category, t.division].filter(Boolean);
+    return parts.join(" — ");
+  }
+
+  // A. NOW team
+  if (pad.now) {
+    const l = teamCatDiv(pad.now);
+    if (l) return l;
+  }
+
+  // B. ON DECK team
+  if (pad.onDeck) {
+    const l = teamCatDiv(pad.onDeck);
+    if (l) return l;
+  }
+
+  // C. Next scheduled slot (lowest slotOrder, non-terminal)
+  if (scheduledSlots) {
+    const TERMINAL: SlotStatus[] = ["COMPLETE", "SCRATCHED", "SKIPPED"];
+    const next = scheduledSlots
+      .filter((s) => s.padId === pad.id && !TERMINAL.includes(s.status))
+      .sort((a, b) => a.slotOrder - b.slotOrder)[0];
+    if (next) {
+      const parts = [next.category, next.division].filter(Boolean);
+      const l = parts.join(" — ");
+      if (l) return l;
+    }
+  }
+
+  // D. Static pad label
+  const staticLabel = String(pad.label ?? "").trim();
+  if (staticLabel) return staticLabel;
+
+  // E. Blank
+  return "";
+}
+
+/**
+ * Resolves a full TeamDetail for a queue Team entry using multiple strategies:
+ *   1. Direct lookup in state.teamDetails by team.id
+ *   2. Bridge via state.scheduledSlots — finds matching slot, then looks up teamDetails
+ *   3. Scan teamDetails values by display name (covers any residual ID mismatch)
+ *   4. Minimal fallback built from the queue Team object (members: [])
+ *
+ * Never returns null — always returns at minimum a minimal object so the
+ * inspection panel can open.
+ */
+export function resolveTeamDetail(team: Team, state: BoardState | null): TeamDetail {
+  if (state) {
+    // 1. Direct: team.id is set by slotToTeam → sl.teamId, same value keyed in teamDetails
+    const direct = state.teamDetails?.[team.id];
+    if (direct) return direct;
+
+    // 2. Bridge via scheduledSlots in case there's any indirect lookup needed
+    if (state.scheduledSlots) {
+      const slot = state.scheduledSlots.find((sl) => sl.teamId === team.id);
+      if (slot) {
+        const viaSlot = state.teamDetails?.[slot.teamId];
+        if (viaSlot) return viaSlot;
+      }
+    }
+
+    // 3. Name-based scan as last-resort fallback (handles any ID transformation edge cases)
+    if (state.teamDetails && team.name) {
+      const match = Object.values(state.teamDetails).find(
+        (d) => d.teamDisplayName === team.name,
+      );
+      if (match) return match;
+    }
+  }
+
+  // 4. Minimal fallback — shows metadata but no roster
+  return {
+    teamId: team.id,
+    teamDisplayName: team.name,
+    category: team.category,
+    division: team.division ?? undefined,
+    brigade: team.unit,
+    members: [],
   };
 }
 

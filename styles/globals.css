@@ -71,6 +71,190 @@ body {
    Breakpoints: mobile <=640px, tablet 641-1024px, desktop >=1025px
    ========================= */
 
+/* =========================
+   Button & interactive element polish
+   ========================= */
+
+/* Default button cursor */
+button {
+  cursor: pointer;
+}
+
+/* Hover state for all buttons that aren't explicitly styled — lift + brighten */
+button:not(:disabled):hover,
+[role="button"]:not(:disabled):hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+  transition: filter 120ms ease, transform 120ms ease;
+}
+
+button:not(:disabled):active,
+[role="button"]:not(:disabled):active {
+  transform: translateY(0);
+  filter: brightness(0.96);
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* Focus-visible: keyboard/tab navigation ring */
+:focus-visible {
+  outline: 2px solid var(--cacc-gold);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Smooth transitions on inputs */
+input,
+select,
+textarea {
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: rgba(255, 199, 44, 0.6) !important;
+  box-shadow: 0 0 0 3px rgba(255, 199, 44, 0.15);
+}
+
+/* Portal card hover: lifted + brighter border */
+.portal-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(255, 255, 255, 0.40) !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.40) !important;
+}
+
+.portal-card {
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+/* Compact operational header (Judge/Admin) */
+.ops-header-logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 6px;
+  flex-shrink: 0;
+}
+
+.ops-header-title {
+  font-size: clamp(20px, 3.5vw, 28px);
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: 0.5px;
+}
+
+.ops-header-kicker {
+  font-size: clamp(10px, 1.8vw, 13px);
+  font-weight: 700;
+  letter-spacing: 1px;
+  opacity: 0.75;
+  text-transform: uppercase;
+}
+
+/* Login card */
+.login-card {
+  width: min(440px, 92vw);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 32px 28px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+}
+
+.login-logo {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.4));
+}
+
+.login-title {
+  font-size: 22px;
+  font-weight: 800;
+  margin: 0;
+  color: white;
+}
+
+.login-subtitle {
+  font-size: 13px;
+  opacity: 0.75;
+  margin-top: 4px;
+  color: white;
+}
+
+.login-input {
+  width: 100%;
+  padding: 12px 14px;
+  min-height: 46px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.30);
+  color: white;
+  outline: none;
+  font-size: 16px;
+  margin-top: 20px;
+  display: block;
+  box-sizing: border-box;
+}
+
+.login-btn-primary {
+  width: 100%;
+  padding: 13px 14px;
+  min-height: 46px;
+  border-radius: 10px;
+  border: none;
+  background: var(--cacc-gold);
+  color: #111;
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 0.3px;
+  margin-top: 12px;
+  cursor: pointer;
+  transition: filter 120ms ease, transform 120ms ease;
+}
+
+.login-btn-primary:not(:disabled):hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.login-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.login-error {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(198, 40, 40, 0.18);
+  border: 1px solid rgba(198, 40, 40, 0.35);
+  color: #ffb4b4;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.login-back-link {
+  display: block;
+  margin-top: 16px;
+  font-size: 13px;
+  opacity: 0.7;
+  text-align: center;
+}
+
+.login-back-link a {
+  color: var(--cacc-gold);
+  text-decoration: underline;
+}
+
 /* Touch-friendly interactive elements */
 @media (max-width: 640px) {
   button,
@@ -123,39 +307,33 @@ body {
     position: sticky;
     top: 8px;
     z-index: 20;
-    gap: 10px !important;
-    padding: 12px 12px !important;
-    align-items: flex-start !important;
-    text-align: left;
+    padding: 12px 14px !important;
+    /* centered layout preserved; just tighten padding on mobile */
   }
   .public-header-main {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
+    gap: 12px !important;
   }
   .public-header-text {
-    align-items: flex-start !important;
     gap: 2px !important;
   }
   .public-header-org {
     display: none;
   }
   .public-header-logo {
-    width: 52px !important;
-    height: 52px !important;
+    width: 56px !important;
+    height: 56px !important;
     padding: 5px !important;
+    border-radius: 8px !important;
   }
   .public-header-title {
-    font-size: clamp(16px, 3vw, 20px) !important;
+    font-size: clamp(16px, 4vw, 22px) !important;
     line-height: 1.1 !important;
   }
   .public-header-updated {
-    width: 100%;
-    font-size: 12px !important;
-    opacity: 0.85;
-    white-space: normal !important;
+    /* Keep absolute positioning; reduce font-size further on mobile */
+    font-size: 10px !important;
+    bottom: 6px !important;
+    right: 12px !important;
   }
   .public-board-grid {
     gap: 8px !important;
@@ -201,6 +379,13 @@ body {
   .admin-header-inner {
     flex-direction: column !important;
     align-items: flex-start !important;
+    gap: 10px !important;
+    padding: 12px !important;
+  }
+  .admin-header-inner .ops-header-logo {
+    width: 44px !important;
+    height: 44px !important;
+    padding: 4px !important;
   }
   .admin-header-actions {
     width: 100%;
@@ -220,6 +405,73 @@ body {
   .admin-areas-row > div:first-child {
     order: -1;
   }
+}
+
+/* =========================
+   Section / Card layout utilities
+   ========================= */
+
+/* Standard content section card */
+.section-card {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  padding: 16px;
+  margin-top: 12px;
+}
+
+/* Section heading label */
+.section-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  opacity: 0.55;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.10);
+}
+
+/* Status feedback bar */
+.status-bar {
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 10px;
+}
+
+.status-bar.success {
+  background: rgba(76, 175, 80, 0.18);
+  border: 1px solid rgba(76, 175, 80, 0.40);
+  color: #a5d6a7;
+}
+
+.status-bar.error {
+  background: rgba(198, 40, 40, 0.16);
+  border: 1px solid rgba(198, 40, 40, 0.40);
+  color: #f48fb1;
+}
+
+/* Flat input consistent style */
+.flat-input {
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.28);
+  color: white;
+  outline: none;
+  font-size: 14px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 /* IMPORTANT:

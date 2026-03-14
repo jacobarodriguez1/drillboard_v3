@@ -8,11 +8,13 @@ import type {
   Pad,
   Division,
   ScheduleEvent,
+  ScheduleSlot,
   Team,
+  TeamDetail,
 } from "@/lib/state";
-import { getCompetitionNowMs } from "@/lib/state";
+import { getCompetitionNowMs, resolveAreaLabel, resolveTeamDetail } from "@/lib/state";
 import { getSocket } from "@/lib/socketClient";
-import { fmtTime, buttonStyle, chipStyle, mmssFromSeconds } from "@/lib/ui";
+import { fmtTime, buttonStyle, chipStyle, mmssFromSeconds, compactBtnStyle } from "@/lib/ui";
 import { requireAdminRole } from "@/lib/auth";
 import {
   PadHeader,
@@ -20,6 +22,7 @@ import {
   PadOnDeckSection,
   PadStandbySection,
 } from "@/components/PadLayout";
+import TeamInspectionPanel, { type TeamInspectionContext } from "@/components/TeamInspectionPanel";
 
 const COLOR_ORANGE = "rgba(255,152,0,0.95)"; // BREAK
 const COLOR_YELLOW = "rgba(255,235,59,0.95)"; // REPORT
@@ -77,9 +80,8 @@ function areaName(p: Pad): string {
   return n.length ? n : `AREA ${p.id}`;
 }
 
-function areaLabel(p: Pad): string {
-  const l = String((p as any).label ?? "").trim();
-  return l.length ? l : "";
+function areaLabel(p: Pad, scheduledSlots?: import("@/lib/state").ScheduleSlot[]): string {
+  return resolveAreaLabel(p, scheduledSlots);
 }
 
 function mmss(sec: number) {
@@ -136,7 +138,7 @@ function teamLine(t?: Team | null) {
   const tag = (t as any).tag as string | undefined;
   return (
     <span>
-      <span style={{ fontWeight: 950, color: "var(--text-primary)" }}>
+      <span style={{ fontWeight: 800, color: "var(--text-primary)" }}>
         {t.name}
       </span>
       {meta ? (
@@ -188,11 +190,15 @@ export default function JudgeConsole() {
   const [lastAction, setLastAction] = useState("—");
   const [judgeBound, setJudgeBound] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
+  const [orderWarning, setOrderWarning] = useState<{ message: string; expectedTeamName: string; expectedSlotOrder: number; nowTeamName: string; nowSlotOrder: number } | null>(null);
 
   const activePadId = lockedPadId;
 
   const [, tick] = useState(0);
 
+  // Team Inspection
+  const [inspectTeam, setInspectTeam] = useState<Team | null>(null);
+  const [inspectCtx, setInspectCtx] = useState<TeamInspectionContext | undefined>(undefined);
 
   // Manual add modal
   const [showAdd, setShowAdd] = useState(false);
@@ -279,10 +285,15 @@ export default function JudgeConsole() {
       setLastAction(`❌ ${msg}`);
     };
 
+    const onOrderWarning = (payload: { message: string; expectedTeamName: string; expectedSlotOrder: number; nowTeamName: string; nowSlotOrder: number }) => {
+      setOrderWarning(payload);
+    };
+
     s.on("connect", onConnect);
     s.on("disconnect", onDisconnect);
     s.on("state", onState);
     s.on("judge:error", onJudgeError);
+    s.on("judge:orderWarning", onOrderWarning);
 
     setConnected(Boolean(s.connected));
     if (Boolean(s.connected)) {
@@ -305,6 +316,7 @@ export default function JudgeConsole() {
       s.off?.("disconnect", onDisconnect);
       s.off?.("state", onState);
       s.off?.("judge:error", onJudgeError);
+      s.off?.("judge:orderWarning", onOrderWarning);
       clearInterval(interval);
       window.removeEventListener("keydown", onKey);
     };
@@ -574,6 +586,20 @@ export default function JudgeConsole() {
   void onPadTick; // ensure tick drives re-renders (prevents React optimization)
   const elapsedSec = arrivedAtMs ? Math.floor(Math.max(0, (Date.now() - arrivedAtMs) / 1000)) : 0;
 
+  // Anticipated start times from imported schedule
+  const nowSlot: ScheduleSlot | null = state?.scheduledSlots && pad?.now
+    ? (state.scheduledSlots.find(
+        (sl: ScheduleSlot) => sl.padId === activePadId && sl.teamId === pad!.now!.id &&
+          sl.status !== "COMPLETE" && sl.status !== "SCRATCHED" && sl.status !== "SKIPPED"
+      ) ?? null)
+    : null;
+  const onDeckSlot: ScheduleSlot | null = state?.scheduledSlots && pad?.onDeck
+    ? (state.scheduledSlots.find(
+        (sl: ScheduleSlot) => sl.padId === activePadId && sl.teamId === pad!.onDeck!.id &&
+          sl.status !== "COMPLETE" && sl.status !== "SCRATCHED" && sl.status !== "SKIPPED"
+      ) ?? null)
+    : null;
+
   const canAdvance = canActOnPad && !globalBreakActive && !localBreakActive;
   const canMarkArrived = canAdvance && !!pad?.now && !arrivedValid;
   const canMarkComplete = canAdvance && !!pad?.now;
@@ -623,6 +649,30 @@ export default function JudgeConsole() {
     } catch {}
     window.location.href = "/judge/login";
   }
+
+  const openInspect = (team: Team, ctx?: TeamInspectionContext) => {
+    // Diagnostic log — helps confirm whether teamDetails and scheduledSlots are populated
+    const slot = state?.scheduledSlots?.find((sl) => sl.teamId === team.id);
+    const directHit = state?.teamDetails?.[team.id];
+    console.log("[INSPECT_DEBUG]", {
+      entryId: team.id,
+      entryName: team.name,
+      matchedSlotId: slot?.slotId ?? null,
+      matchedSlotTeamId: slot?.teamId ?? null,
+      teamDetailsDirectHit: !!directHit,
+      memberCount: directHit?.members?.length ?? 0,
+      teamDetailsKeyCount: Object.keys(state?.teamDetails ?? {}).length,
+      sampleKeys: Object.keys(state?.teamDetails ?? {}).slice(0, 3),
+    });
+    setInspectTeam(team);
+    setInspectCtx(ctx);
+  };
+  const closeInspect = () => setInspectTeam(null);
+
+  const inspectDetail = useMemo((): TeamDetail | null => {
+    if (!inspectTeam) return null;
+    return resolveTeamDetail(inspectTeam, state);
+  }, [inspectTeam, state]);
 
   // Primary actions
   const doArrived = () => emitPad("judge:arrived", payloadBase, "MARK ARRIVED");
@@ -728,24 +778,17 @@ export default function JudgeConsole() {
         }
         @media (max-width: 640px) {
           .judge-header {
-            padding: 12px 12px !important;
-            gap: 10px !important;
+            padding: 10px 12px !important;
+            gap: 8px !important;
           }
           .judge-header-brand {
             gap: 10px !important;
             width: 100%;
           }
-          .judge-header-brand img {
-            width: 58px !important;
-            height: 58px !important;
-            padding: 6px !important;
-          }
-          .judge-header-kicker {
-            font-size: 13px !important;
-            letter-spacing: 0.7px !important;
-          }
-          .judge-header-title {
-            font-size: clamp(22px, 6vw, 30px) !important;
+          .judge-header-brand .ops-header-logo {
+            width: 44px !important;
+            height: 44px !important;
+            padding: 4px !important;
           }
           .judge-mobile-statusline {
             display: block !important;
@@ -770,6 +813,33 @@ export default function JudgeConsole() {
           .judge-mobile-switch {
             width: 100%;
             justify-content: center;
+            background: rgba(255, 199, 44, 0.15) !important;
+            border-color: rgba(255, 199, 44, 0.35) !important;
+          }
+          /* Mobile area overlay */
+          .judge-mobile-area-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 80;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            align-items: flex-end;
+          }
+          .judge-mobile-area-sheet {
+            width: 100%;
+            background: #0e1628;
+            border-top: 1px solid rgba(255,255,255,0.15);
+            border-radius: 20px 20px 0 0;
+            padding: 20px 16px 32px;
+            max-height: 70vh;
+            overflow-y: auto;
+          }
+          .judge-mobile-area-sheet-handle {
+            width: 36px;
+            height: 4px;
+            background: rgba(255,255,255,0.25);
+            border-radius: 2px;
+            margin: 0 auto 16px;
           }
         }
 
@@ -779,10 +849,12 @@ export default function JudgeConsole() {
           padding-right: 6px;
         }
         .chatBubble {
-          border-radius: 14px;
+          border-radius: 12px;
           padding: 10px 12px;
-          border: 1px solid rgba(255,255,255,0.12);
-          background: rgba(0,0,0,0.20);
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(0,0,0,0.22);
+          font-size: 13px;
+          line-height: 1.45;
         }
       `}</style>
 
@@ -809,49 +881,29 @@ export default function JudgeConsole() {
             flexWrap: "wrap",
           }}
         >
-          <div className="judge-header-brand" style={{ display: "flex", gap: 16, alignItems: "center" }}>
+          <div className="judge-header-brand" style={{ display: "flex", gap: 14, alignItems: "center" }}>
             <img
               src="/cacc-shield.png"
               alt="California Cadet Corps"
-              style={{
-                width: 132,
-                height: 132,
-                objectFit: "contain",
-                borderRadius: 14,
-                background: "rgba(0,0,0,0.25)",
-                border: "1px solid rgba(255,255,255,0.14)",
-                padding: 10,
-              }}
+              className="ops-header-logo"
             />
 
             <div>
-              <div
-                className="judge-header-kicker"
-                style={{
-                  fontSize: 22,
-                  fontWeight: 900,
-                  letterSpacing: 1.2,
-                  opacity: 0.92,
-                  lineHeight: 1.1,
-                }}
-              >
-                CALIFORNIA CADET CORPS
+              <div className="ops-header-kicker judge-header-kicker">
+                California Cadet Corps
               </div>
 
               <div
                 style={{
-                  marginTop: 6,
+                  marginTop: 3,
                   display: "flex",
-                  gap: 12,
+                  gap: 10,
                   alignItems: "baseline",
                   flexWrap: "wrap",
                 }}
               >
-                <div
-                  className="judge-header-title"
-                  style={{ fontSize: 40, fontWeight: 1000, lineHeight: 1.05 }}
-                >
-                  JUDGE CONSOLE
+                <div className="ops-header-title judge-header-title">
+                  Judge Console
                 </div>
 
                 <div
@@ -859,16 +911,16 @@ export default function JudgeConsole() {
                   style={{ display: "none" }}
                 >
                   {pad
-                    ? `PAD ${lockedPadId} — ${areaLabel(pad) || "UNLABELED"}`
-                    : "PAD —"}{" "}
-                  • {connected ? "CONNECTED" : "CONNECTING"}
+                    ? `${areaName(pad)} — ${areaLabel(pad, state?.scheduledSlots) || "Unlabeled"}`
+                    : "No pad"}{" "}
+                  · {connected ? "Connected" : "Connecting…"}
                 </div>
 
-                <div style={{ fontSize: 12, opacity: 0.8 }}>
+                <div style={{ fontSize: 12, opacity: 0.65 }}>
                   {state?.updatedAt
-                    ? `Last update: ${fmtTime(state.updatedAt)}`
+                    ? `Updated ${fmtTime(state.updatedAt)}`
                     : "Waiting for state…"}{" "}
-                  • Last action: {lastAction}
+                  · {lastAction !== "—" ? `Last: ${lastAction}` : ""}
                 </div>
               </div>
             </div>
@@ -899,7 +951,7 @@ export default function JudgeConsole() {
                   "white",
                 )}
               >
-                {judgeBound ? `Assigned: Pad ${lockedPadId}` : bindError ?? "Binding…"}
+                {judgeBound ? `Assigned: ${areaName(pad)}` : bindError ?? "Binding…"}
               </span>
             ) : null}
 
@@ -911,7 +963,7 @@ export default function JudgeConsole() {
               >
                 {showMobileAreaList
                   ? "Close Area List"
-                  : `Switch Pad${lockedPadId != null ? ` (Pad ${lockedPadId})` : ""}`}
+                  : `Switch Pad${pad ? ` (${areaName(pad)})` : ""}`}
               </button>
             ) : null}
 
@@ -953,7 +1005,7 @@ export default function JudgeConsole() {
               <div
                 style={{
                   marginLeft: "auto",
-                  fontWeight: 950,
+                  fontWeight: 800,
                   color: "var(--cacc-gold)",
                 }}
               >
@@ -966,8 +1018,70 @@ export default function JudgeConsole() {
 
         {/* Main 3-zone layout */}
         <div className="layout judge-layout">
-          {/* LEFT: AREA TOGGLE */}
-          {(!isMobile || showMobileAreaList) ? (
+          {/* LEFT: AREA TOGGLE — desktop sidebar / mobile bottom sheet */}
+          {isMobile && showMobileAreaList ? (
+            <div
+              className="judge-mobile-area-overlay"
+              onClick={() => setShowMobileAreaList(false)}
+            >
+              <div
+                className="judge-mobile-area-sheet"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="judge-mobile-area-sheet-handle" />
+                <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 14 }}>
+                  Select Area
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {pads.length === 0 ? (
+                    <div style={{ opacity: 0.75, fontSize: 13 }}>No areas yet.</div>
+                  ) : pads.map((p) => {
+                    const isLocked = p.id === lockedPadId;
+                    const handleMobileClick = () => {
+                      if (lockedPadId === null) {
+                        setLockedPadId(p.id);
+                        setShowMobileAreaList(false);
+                        try { localStorage.setItem(JUDGE_PAD_STORAGE_KEY, String(p.id)); } catch {}
+                        socket?.emit?.("judge:area:set", { padId: p.id });
+                      } else if (p.id !== lockedPadId) {
+                        setPendingPadId(p.id);
+                        setShowConfirmChangeArea(true);
+                        setShowMobileAreaList(false);
+                      }
+                    };
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={handleMobileClick}
+                        style={{
+                          textAlign: "left",
+                          padding: "14px 16px",
+                          borderRadius: 12,
+                          border: isLocked ? "2px solid rgba(76,175,80,0.7)" : "1px solid rgba(255,255,255,0.14)",
+                          background: isLocked ? "rgba(76,175,80,0.18)" : "rgba(255,255,255,0.05)",
+                          color: "white",
+                          cursor: "pointer",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 700 }}>{areaName(p)}</div>
+                          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>{areaLabel(p, state?.scheduledSlots)}</div>
+                        </div>
+                        {isLocked && (
+                          <span style={{ fontSize: 11, color: "#81c784", fontWeight: 700 }}>ASSIGNED</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {!isMobile ? (
           <aside style={{ ...cardStyle(), padding: 12 }}>
             <div
               style={{
@@ -976,18 +1090,18 @@ export default function JudgeConsole() {
                 alignItems: "baseline",
               }}
             >
-              <div style={{ fontWeight: 1000 }}>Areas</div>
-              <div style={{ fontSize: 11, opacity: 0.75 }}>
+              <div style={{ fontWeight: 800, fontSize: 13, letterSpacing: 0.3 }}>Areas</div>
+              <div style={{ fontSize: 11, opacity: 0.65 }}>
               {lockedPadId != null ? "Assigned" : "Select area"}
             </div>
             </div>
 
             <div
               style={{
-                marginTop: 4,
+                marginTop: 8,
                 display: "flex",
                 flexDirection: "column",
-                gap: 8,
+                gap: 6,
               }}
             >
               {pads.length === 0 ? (
@@ -1046,7 +1160,7 @@ export default function JudgeConsole() {
                         Assigned
                       </span>
                     ) : null}
-                    <div style={{ fontWeight: 950 }}>{areaName(p)}</div>
+                    <div style={{ fontWeight: 800 }}>{areaName(p)}</div>
                     <div
                       style={{
                         marginTop: 4,
@@ -1057,7 +1171,7 @@ export default function JudgeConsole() {
                         whiteSpace: "nowrap",
                       }}
                     >
-                      {areaLabel(p)}
+                      {areaLabel(p, state?.scheduledSlots)}
                     </div>
                   </button>
                 );
@@ -1066,6 +1180,7 @@ export default function JudgeConsole() {
             </div>
           </aside>
           ) : null}
+          {/* end !isMobile aside */}
 
           {/* CENTER: OPERATOR */}
           <section className="judge-center-panel" style={{ ...cardStyle(), padding: 16 }}>
@@ -1081,7 +1196,7 @@ export default function JudgeConsole() {
               <PadHeader
                 variant="operational"
                 padName={pad ? areaName(pad) : "—"}
-                subtitle={pad ? areaLabel(pad) : ""}
+                subtitle={pad ? areaLabel(pad, state?.scheduledSlots) : ""}
                 statusPill={
                   <span
                     style={chipStyle(
@@ -1153,6 +1268,47 @@ export default function JudgeConsole() {
               </div>
             </div>
 
+            {/* Schedule order warning banner */}
+            {orderWarning && (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  background: "rgba(198,40,40,0.18)",
+                  border: "2px solid rgba(198,40,40,0.7)",
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 10,
+                }}
+              >
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 800, fontSize: 13, color: "#f48fb1" }}>
+                    ⚠ OUT OF SCHEDULE ORDER
+                  </div>
+                  <div style={{ fontSize: 12, color: "rgba(255,255,255,0.75)", marginTop: 4 }}>
+                    <b>{orderWarning.nowTeamName}</b> (slot #{orderWarning.nowSlotOrder}) started before{" "}
+                    <b>{orderWarning.expectedTeamName}</b> (slot #{orderWarning.expectedSlotOrder}).
+                    Admin should use Override Order on the earlier slot or mark it SKIPPED.
+                  </div>
+                </div>
+                <button
+                  onClick={() => setOrderWarning(null)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "rgba(255,255,255,0.5)",
+                    cursor: "pointer",
+                    fontSize: 16,
+                    padding: "0 4px",
+                    flexShrink: 0,
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
             {/* PRIMARY SECTION (merged: status + competitor once, no duplication) */}
             <div style={{ marginTop: 14 }}>
               {pad && localBreakActive ? (
@@ -1167,7 +1323,7 @@ export default function JudgeConsole() {
                       style={{
                         fontFamily:
                           "ui-monospace, SFMono-Regular, Menlo, monospace",
-                        fontWeight: 1000,
+                        fontWeight: 800,
                       }}
                     >
                       {localBreakRemaining != null ? mmssFromSeconds(localBreakRemaining) : "—"}
@@ -1199,7 +1355,7 @@ export default function JudgeConsole() {
                       style={{
                         fontFamily:
                           "ui-monospace, SFMono-Regular, Menlo, monospace",
-                        fontWeight: 1000,
+                        fontWeight: 800,
                         color: reportIsLate ? "white" : "#111",
                       }}
                     >
@@ -1211,7 +1367,7 @@ export default function JudgeConsole() {
                     </span>
                   }
                   competitorContent={pad.now?.name ?? "—"}
-                  subContent="Press MARK ARRIVED as soon as the team is physically on the pad."
+                  subContent={`Press MARK ARRIVED as soon as the team is physically on the pad.${nowSlot?.anticipatedStart ? ` · Sched: ${nowSlot.anticipatedStart}` : ""}`}
                   bannerOverrides={{
                     background: reportIsLate
                       ? "rgba(198,40,40,0.16)"
@@ -1232,14 +1388,14 @@ export default function JudgeConsole() {
                       style={{
                         fontFamily:
                           "ui-monospace, SFMono-Regular, Menlo, monospace",
-                        fontWeight: 1000,
+                        fontWeight: 800,
                       }}
                     >
                       {arrivedAtMs != null ? mmss(elapsedSec) : "—"}
                     </span>
                   }
                   competitorContent={pad.now?.name ?? "—"}
-                  subContent={`Arrived at ${pad.nowArrivedAt ? fmtTime(pad.nowArrivedAt) : "—"}`}
+                  subContent={`Arrived at ${pad.nowArrivedAt ? fmtTime(pad.nowArrivedAt) : "—"}${nowSlot?.anticipatedStart ? ` · Sched: ${nowSlot.anticipatedStart}` : ""}`}
                   bannerOverrides={{
                     background: "rgba(144,202,249,0.12)",
                     border: "2px solid rgba(144,202,249,0.85)",
@@ -1257,7 +1413,7 @@ export default function JudgeConsole() {
                   competitorContent={pad?.now?.name ?? "Ready"}
                   subContent={
                     isLive
-                      ? "No active timers on this pad right now."
+                      ? `No active timers on this pad right now.${nowSlot?.anticipatedStart ? ` · Sched: ${nowSlot.anticipatedStart}` : ""}`
                       : "Event not started. Admin must click Start Now to begin."
                   }
                   bannerOverrides={{
@@ -1320,6 +1476,20 @@ export default function JudgeConsole() {
                   >
                     Skip Team
                   </button>
+                  <button
+                    onClick={() => {
+                      if (!pad?.now) return;
+                      openInspect(pad.now, {
+                        padName: areaName(pad),
+                        queueStatus: "NOW",
+                        slotOrder: nowSlot?.slotOrder,
+                        anticipatedStart: nowSlot?.anticipatedStart,
+                      });
+                    }}
+                    style={compactBtnStyle()}
+                  >
+                    Inspect
+                  </button>
                 </div>
               ) : null}
             </div>
@@ -1331,7 +1501,29 @@ export default function JudgeConsole() {
                 label="ON DECK"
                 labelRight="NEXT"
               >
-                {teamLine(pad?.onDeck)}
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                  <div>
+                    {teamLine(pad?.onDeck)}
+                    {onDeckSlot?.anticipatedStart ? (
+                      <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>
+                        Sched: {onDeckSlot.anticipatedStart}
+                      </div>
+                    ) : null}
+                  </div>
+                  {pad?.onDeck ? (
+                    <button
+                      onClick={() => openInspect(pad!.onDeck!, {
+                        padName: areaName(pad!),
+                        queueStatus: "ON DECK",
+                        slotOrder: onDeckSlot?.slotOrder,
+                        anticipatedStart: onDeckSlot?.anticipatedStart,
+                      })}
+                      style={compactBtnStyle()}
+                    >
+                      Inspect
+                    </button>
+                  ) : null}
+                </div>
               </PadOnDeckSection>
 
               <PadStandbySection
@@ -1345,17 +1537,25 @@ export default function JudgeConsole() {
                     style={{ display: "flex", flexDirection: "column", gap: 6 }}
                   >
                     {(pad?.standby ?? []).slice(0, 6).map((t, idx) => (
-                      <div key={t.id} style={{ fontSize: 13, opacity: 0.95 }}>
-                        <span
-                          style={{
-                            opacity: 0.7,
-                            fontFamily:
-                              "ui-monospace, SFMono-Regular, Menlo, monospace",
-                          }}
+                      <div key={t.id} style={{ fontSize: 13, opacity: 0.95, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <div>
+                          <span
+                            style={{
+                              opacity: 0.7,
+                              fontFamily:
+                                "ui-monospace, SFMono-Regular, Menlo, monospace",
+                            }}
+                          >
+                            #{idx + 1}
+                          </span>{" "}
+                          {teamLine(t)}
+                        </div>
+                        <button
+                          onClick={() => openInspect(t, { padName: areaName(pad!), queueStatus: "STANDBY" })}
+                          style={compactBtnStyle()}
                         >
-                          #{idx + 1}
-                        </span>{" "}
-                        {teamLine(t)}
+                          Inspect
+                        </button>
                       </div>
                     ))}
                     {(pad?.standby?.length ?? 0) > 6 ? (
@@ -1379,7 +1579,7 @@ export default function JudgeConsole() {
                   alignItems: "baseline",
                 }}
               >
-                <div style={{ fontWeight: 1000 }}>Tools</div>
+                <div style={{ fontWeight: 800 }}>Tools</div>
               </div>
 
               {/* =========================
@@ -1402,7 +1602,7 @@ export default function JudgeConsole() {
                     marginBottom: 10,
                   }}
                 >
-                  <div style={{ fontWeight: 1000 }}>🗨️ Ops Chat</div>
+                  <div style={{ fontWeight: 800 }}>🗨️ Ops Chat</div>
                   <div style={{ opacity: 0.75, fontSize: 12 }}>
                     <div style={{ opacity: 0.75, fontSize: 12 }}>
                       Area {activePadId ?? "—"}
@@ -1583,7 +1783,7 @@ export default function JudgeConsole() {
                   border: `1px solid rgba(255,152,0,0.35)`,
                 }}
               >
-                <div style={{ fontWeight: 1000 }}>🟠 Area Break</div>
+                <div style={{ fontWeight: 800 }}>🟠 Area Break</div>
                 <div style={{ marginTop: 8, opacity: 0.75, fontSize: 12 }}>
                   Start an area-only break. If pressed during reporting, it
                   overrides the report timer.
@@ -1674,7 +1874,7 @@ export default function JudgeConsole() {
                   border: "1px solid rgba(255,255,255,0.10)",
                 }}
               >
-                <div style={{ fontWeight: 1000 }}>Area Label</div>
+                <div style={{ fontWeight: 800 }}>Area Label</div>
                 <div
                   style={{
                     marginTop: 8,
@@ -1721,7 +1921,7 @@ export default function JudgeConsole() {
                   border: "1px solid rgba(255,255,255,0.10)",
                 }}
               >
-                <div style={{ fontWeight: 1000 }}>Manual Add</div>
+                <div style={{ fontWeight: 800 }}>Manual Add</div>
                 <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
                   Insert into NOW / ON DECK / END (tagged MANUAL).
                 </div>
@@ -1777,7 +1977,7 @@ export default function JudgeConsole() {
                   alignItems: "center",
                 }}
               >
-                <div style={{ fontWeight: 1000, fontSize: 18 }}>
+                <div style={{ fontWeight: 800, fontSize: 18 }}>
                   Manual Add Team
                 </div>
                 <button
@@ -1970,7 +2170,7 @@ export default function JudgeConsole() {
                 padding: 16,
               }}
             >
-              <div style={{ fontWeight: 1000, fontSize: 18 }}>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>
                 Change Judging Area?
               </div>
               <div
@@ -1981,7 +2181,7 @@ export default function JudgeConsole() {
                   lineHeight: 1.35,
                 }}
               >
-                You are currently assigned to Pad {lockedPadId} — {areaName(pad)}.
+                You are currently assigned to {areaName(pad)}.
                 Changing areas may affect scoring. Continue?
               </div>
 
@@ -2034,6 +2234,16 @@ export default function JudgeConsole() {
               </div>
             </div>
           </div>
+        ) : null}
+
+        {/* Team Inspection Panel */}
+        {inspectDetail ? (
+          <TeamInspectionPanel
+            detail={inspectDetail}
+            context={inspectCtx}
+            isAdmin={false}
+            onClose={closeInspect}
+          />
         ) : null}
       </main>
     </>
