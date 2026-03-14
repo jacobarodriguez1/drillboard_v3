@@ -1,0 +1,121 @@
+﻿teamId,teamCode,brigade,schoolName,division,category
+1,T001,1st Brigade,Ocean Terrace Charter HS,Junior,Unarmed Platoon
+2,T002,1st Brigade,Mission Oaks High School,Junior,Exhibition Drill
+3,T003,1st Brigade,Oak Cove HS,Senior,Armed Platoon
+4,T004,1st Brigade,Mission Oaks High School,Senior,Armed Squad
+5,T005,1st Brigade,Oak Cove HS,Senior,Exhibition Drill
+6,T006,1st Brigade,Mission Oaks High School,Senior,Armed Platoon
+7,T007,1st Brigade,Ocean Terrace Charter HS,Junior,Color Guard
+8,T008,1st Brigade,Ocean Terrace Charter HS,Junior,Armed Squad
+9,T009,2nd Brigade,Silver Pass Academy,Junior,Color Guard
+10,T010,2nd Brigade,Silver Pass Academy,Senior,Unarmed Squad
+11,T011,2nd Brigade,Silver Pass Academy,Senior,Armed Squad
+12,T012,2nd Brigade,Silver Pass Academy,Senior,Color Guard
+13,T013,2nd Brigade,Canyon Pines HS,Junior,Armed Squad
+14,T014,2nd Brigade,Canyon Pines HS,Junior,Unarmed Squad
+15,T015,2nd Brigade,Canyon Pines HS,Junior,Unarmed Platoon
+16,T016,2nd Brigade,Canyon Pines HS,Senior,Unarmed Platoon
+17,T017,3rd Brigade,Evergreen Park High School,Senior,Exhibition Drill
+18,T018,3rd Brigade,Evergreen Park High School,Senior,Unarmed Platoon
+19,T019,3rd Brigade,Evergreen Park High School,Junior,Armed Platoon
+20,T020,3rd Brigade,Evergreen Park High School,Junior,Unarmed Squad
+21,T021,3rd Brigade,Sunset Creek Charter HS,Senior,Unarmed Squad
+22,T022,3rd Brigade,Sunset Creek Charter HS,Junior,Exhibition Drill
+23,T023,3rd Brigade,Sunset Creek Charter HS,Senior,Color Guard
+24,T024,3rd Brigade,Sunset Creek Charter HS,Junior,Armed Squad
+25,T025,4th Brigade,Juniper Sands High School,Senior,Armed Platoon
+26,T026,4th Brigade,Juniper Sands High School,Junior,Color Guard
+27,T027,4th Brigade,Juniper Sands High School,Senior,Unarmed Platoon
+28,T028,4th Brigade,Juniper Sands High School,Junior,Armed Squad
+29,T029,4th Brigade,Liberty Park HS,Junior,Unarmed Squad
+30,T030,4th Brigade,Liberty Park HS,Senior,Armed Squad
+31,T031,4th Brigade,Liberty Park HS,Senior,Color Guard
+32,T032,4th Brigade,Liberty Park HS,Junior,Exhibition Drill
+33,T033,5th Brigade,Pacific Cove High School,Senior,Color Guard
+34,T034,5th Brigade,Pacific Cove High School,Junior,Armed Platoon
+35,T035,5th Brigade,Pacific Cove High School,Junior,Exhibition Drill
+36,T036,5th Brigade,Pacific Cove High School,Senior,Unarmed Squad
+37,T037,5th Brigade,Pacific Cove High School,Junior,Unarmed Platoon
+38,T038,5th Brigade,Miramar Grove HS,Senior,Unarmed Platoon
+39,T039,5th Brigade,Miramar Grove HS,Senior,Armed Squad
+40,T040,5th Brigade,Miramar Grove HS,Junior,Color Guard
+41,T041,6th Brigade,Granite Harbor Charter HS,Senior,Armed Squad
+42,T042,6th Brigade,Granite Harbor Charter HS,Junior,Unarmed Squad
+43,T043,6th Brigade,Granite Harbor Charter HS,Senior,Unarmed Platoon
+44,T044,6th Brigade,Granite Harbor Charter HS,Junior,Armed Platoon
+45,T045,6th Brigade,Sequoia Springs High School,Junior,Color Guard
+46,T046,6th Brigade,Sequoia Springs High School,Senior,Exhibition Drill
+47,T047,6th Brigade,Sequoia Springs High School,Senior,Armed Platoon
+48,T048,6th Brigade,Sequoia Springs High School,Junior,Armed Squad
+49,T049,7th Brigade,Coronado Crest HS,Senior,Unarmed Squad
+50,T050,7th Brigade,Coronado Crest HS,Junior,Unarmed Platoon
+51,T051,7th Brigade,Coronado Crest HS,Junior,Armed Squad
+52,T052,7th Brigade,Coronado Crest HS,Senior,Color Guard
+53,T053,7th Brigade,Coronado Crest HS,Senior,Armed Platoon
+54,T054,7th Brigade,Citrus Mesa Academy,Junior,Exhibition Drill
+55,T055,7th Brigade,Citrus Mesa Academy,Senior,Unarmed Platoon
+56,T056,7th Brigade,Citrus Mesa Academy,Junior,Color Guard
+57,T057,8th Brigade,Highland Cove High School,Junior,Armed Platoon
+58,T058,8th Brigade,Highland Cove High School,Senior,Unarmed Squad
+59,T059,8th Brigade,Highland Cove High School,Junior,Unarmed Platoon
+60,T060,8th Brigade,Highland Cove High School,Senior,Armed Squad
+61,T061,8th Brigade,Arroyo Terrace HS,Senior,Armed Platoon
+62,T062,8th Brigade,Arroyo Terrace HS,Junior,Unarmed Squad
+63,T063,8th Brigade,Arroyo Terrace HS,Junior,Color Guard
+64,T064,8th Brigade,Arroyo Terrace HS,Senior,Exhibition Drill
+65,T065,9th Brigade,Monterey Crest High School,Senior,Color Guard
+66,T066,9th Brigade,Monterey Crest High School,Junior,Exhibition Drill
+67,T067,9th Brigade,Monterey Crest High School,Junior,Unarmed Platoon
+68,T068,9th Brigade,Monterey Crest High School,Senior,Armed Squad
+69,T069,9th Brigade,Monterey Crest High School,Senior,Unarmed Platoon
+70,T070,9th Brigade,Laguna Grove HS,Junior,Armed Platoon
+71,T071,9th Brigade,Laguna Grove HS,Junior,Unarmed Squad
+72,T072,9th Brigade,Laguna Grove HS,Senior,Armed Platoon
+73,T073,10th Brigade,Santa Harbor Charter HS,Senior,Exhibition Drill
+74,T074,10th Brigade,Santa Harbor Charter HS,Junior,Armed Squad
+75,T075,10th Brigade,Santa Harbor Charter HS,Senior,Color Guard
+76,T076,10th Brigade,Santa Harbor Charter HS,Junior,Unarmed Platoon
+77,T077,10th Brigade,Willow Springs HS,Junior,Color Guard
+78,T078,10th Brigade,Willow Springs HS,Senior,Unarmed Squad
+79,T079,10th Brigade,Willow Springs HS,Senior,Armed Squad
+80,T080,10th Brigade,Willow Springs HS,Junior,Exhibition Drill
+81,T081,11th Brigade,San Ridge High School,Senior,Armed Platoon
+82,T082,11th Brigade,San Ridge High School,Junior,Unarmed Squad
+83,T083,11th Brigade,San Ridge High School,Senior,Unarmed Platoon
+84,T084,11th Brigade,San Ridge High School,Junior,Color Guard
+85,T085,11th Brigade,San Ridge High School,Junior,Armed Squad
+86,T086,11th Brigade,Pioneer Cove HS,Senior,Color Guard
+87,T087,11th Brigade,Pioneer Cove HS,Senior,Unarmed Squad
+88,T088,11th Brigade,Pioneer Cove HS,Junior,Exhibition Drill
+89,T089,12th Brigade,Valley Grove Academy,Junior,Unarmed Platoon
+90,T090,12th Brigade,Valley Grove Academy,Senior,Armed Squad
+91,T091,12th Brigade,Valley Grove Academy,Junior,Color Guard
+92,T092,12th Brigade,Valley Grove Academy,Senior,Unarmed Squad
+93,T093,12th Brigade,Valley Grove Academy,Senior,Armed Platoon
+94,T094,12th Brigade,Golden Park High School,Junior,Armed Platoon
+95,T095,12th Brigade,Golden Park High School,Senior,Color Guard
+96,T096,12th Brigade,Golden Park High School,Junior,Exhibition Drill
+97,T097,13th Brigade,Mesa Point HS,Senior,Exhibition Drill
+98,T098,13th Brigade,Mesa Point HS,Junior,Armed Squad
+99,T099,13th Brigade,Mesa Point HS,Senior,Unarmed Platoon
+100,T100,13th Brigade,Mesa Point HS,Junior,Color Guard
+101,T101,13th Brigade,Mesa Point HS,Senior,Armed Platoon
+102,T102,13th Brigade,Rancho Pines High School,Junior,Unarmed Squad
+103,T103,13th Brigade,Rancho Pines High School,Senior,Color Guard
+104,T104,13th Brigade,Rancho Pines High School,Junior,Unarmed Platoon
+105,T105,14th Brigade,Cedar Terrace Charter HS,Senior,Armed Squad
+106,T106,14th Brigade,Cedar Terrace Charter HS,Junior,Unarmed Platoon
+107,T107,14th Brigade,Cedar Terrace Charter HS,Junior,Exhibition Drill
+108,T108,14th Brigade,Cedar Terrace Charter HS,Senior,Unarmed Squad
+109,T109,14th Brigade,Horizon Springs High School,Senior,Color Guard
+110,T110,14th Brigade,Horizon Springs High School,Junior,Color Guard
+111,T111,14th Brigade,Horizon Springs High School,Senior,Armed Platoon
+112,T112,14th Brigade,Horizon Springs High School,Junior,Armed Squad
+113,T113,15th Brigade,Desert Grove High School,Junior,Armed Platoon
+114,T114,15th Brigade,Desert Grove High School,Senior,Color Guard
+115,T115,15th Brigade,Cedar Plains High School,Senior,Unarmed Platoon
+116,T116,15th Brigade,Cedar Plains High School,Junior,Unarmed Platoon
+117,T117,15th Brigade,Cedar Plains High School,Junior,Armed Squad
+118,T118,15th Brigade,Desert Grove High School,Junior,Unarmed Squad
+119,T119,15th Brigade,Cedar Plains High School,Senior,Unarmed Squad
+120,T120,15th Brigade,Desert Grove High School,Senior,Exhibition Drill
